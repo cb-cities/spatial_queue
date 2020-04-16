@@ -1,3 +1,9 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
 import os
 import gc
 import sys
@@ -18,12 +24,18 @@ sys.path.insert(0, absolute_path+'/../')
 from sp import interface 
 
 
+# In[2]:
+
+
 def network(counterflow=False, closure=False, network_file_edges=None, network_file_nodes=None, simulation_outputs=None, scen_nm=''):
 
     links_df0 = pd.read_csv(absolute_path+network_file_edges)
     
-    links_df0['lanes'] = np.where(links_df0['type'].isin(['residential', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link']), 1, links_df0['lanes'])
-    links_df0['maxmph'] = np.where(links_df0['type'].isin(['residential', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link']), 25, links_df0['maxmph'])
+    links_df0['lanes'] = np.where(links_df0['type'].isin(['residential', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified']), 1, links_df0['lanes'])
+    links_df0['maxmph'] = np.where(links_df0['type'].isin(['residential', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified']), 25, links_df0['maxmph'])
+
+    links_df0['lanes'] = np.where(links_df0['type'].isin(['primary', 'primary_link']), 1, links_df0['lanes'])
+    links_df0['maxmph'] = np.where(links_df0['type'].isin(['primary', 'primary_link']), 55, links_df0['maxmph'])
     
     if counterflow == True:
 #         counterflow_roads = ['euclid_ave', 'spruce_ave', 'grizzly_peak_blvd']
@@ -52,7 +64,8 @@ def network(counterflow=False, closure=False, network_file_edges=None, network_f
     links_df0['store_cap'] = links_df0['length']*links_df0['lanes']/8 
     links_df0['store_cap'] = np.where(links_df0['store_cap']<1, 1, links_df0['store_cap'])
     links_df0['stype'] = 'real'
-    links_df0 = links_df0[['edge_id_igraph', 'start_igraph', 'end_igraph', 'stype', 'lanes', 'capacity', 'fft', 'length', 'store_cap', 'geometry']]
+    links_df0 = links_df0[['edge_id_igraph', 'start_igraph', 'end_igraph', 'stype', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'store_cap', 'geometry']]
+    links_df0.to_csv(absolute_path+simulation_outputs+'/simulation_edges.csv', index=False)
 
     nodes_df0 = pd.read_csv(absolute_path+network_file_nodes)
     nodes_df0['node_id_sp'] = nodes_df0['node_id_igraph'] + 1
@@ -72,6 +85,9 @@ def network(counterflow=False, closure=False, network_file_edges=None, network_f
     return g, links_df0, nodes_df0
 
 
+# In[3]:
+
+
 def demand(nodes_df0, phased_flag = False, demand_files=None):
     
     if demand_files == None:
@@ -80,8 +96,8 @@ def demand(nodes_df0, phased_flag = False, demand_files=None):
         agent_id = np.arange(1000)
         agent_departure_time = np.random.randint(low=0, high=100, size=1000)
         od = pd.DataFrame({'agent_id': agent_id, 'o_sp': o_sp, 'd_sp': d_sp, 'd_tm': agent_departure_time})
-        od['cls'] = od['o_sp'].apply(lambda x: 'vn{}'.format(x-1))
-        od['cle'] = od['o_sp'] - 1
+        od['cls'] = od['o_sp'].apply(lambda x: 'vn{}'.format(x-1)) ### id of the start node of the current link
+        od['cle'] = od['o_sp'] - 1 ### id of the end node of the current link
 #         od = pd.DataFrame([[0,3024,14902,0,'vn3023',3023]], columns=['agent_id', 'o_sp', 'd_sp', 'd_tm', 'cls', 'cle'])
         return od
     
@@ -89,28 +105,36 @@ def demand(nodes_df0, phased_flag = False, demand_files=None):
         all_od_list = []
         for demand_file in demand_files:
             od = pd.read_csv(absolute_path + demand_file)
-            od['d_tm'] = np.random.randint(low=0, high=3600*5, size=od.shape[0])
+            
+            if 'agent_id' not in od.columns:
+                od['agent_id'] = np.arange(od.shape[0])
+                
+            if phased_flag == False:
+                od['d_tm'] = 0
+            else:
+                od['d_tm'] = np.random.randint(low=0, high=3600*5, size=od.shape[0])
+            
             od = pd.merge(od, nodes_df0[['node_id_igraph', 'node_osmid']], how='left', left_on='origin_osmid', right_on='node_osmid')
             od['o_sp'] = od['node_id_igraph'] + 1
             od = pd.merge(od[['agent_id', 'o_sp', 'destin_osmid', 'd_tm']], nodes_df0[['node_id_igraph', 'node_osmid']], how='left', left_on='destin_osmid', right_on='node_osmid')
             od['d_sp'] = od['node_id_igraph'] + 1
-            if phased_flag == False:
-                od['d_tm'] = 0
             all_od_list.append(od)
         all_od = pd.concat(all_od_list, sort=False, ignore_index=True)
-        all_od['cls'] = all_od['o_sp'].apply(lambda x: 'vn{}'.format(x-1))
-        all_od['cle'] = all_od['o_sp'] - 1
+        all_od['cls'] = all_od['o_sp'].apply(lambda x: 'vn{}'.format(x-1)) ### id of the start node of the current link
+        all_od['cle'] = all_od['o_sp'] - 1 ### id of the end node of the current link
         all_od = all_od[['agent_id', 'o_sp', 'd_sp', 'd_tm', 'cls', 'cle']]
         all_od = all_od.sample(frac=1).reset_index(drop=True) ### randomly shuffle rows
-        print(all_od.shape)
-        all_od = all_od.iloc[0:100].copy()
+        print('total numbers of agents from file ', all_od.shape)
+        all_od = all_od.iloc[0:5000].copy()
         
-    print('Generating OD')
-    print(all_od.shape)
+    print('total numbers of agents taken ', all_od.shape)
     print(all_od.head())
-    # raise SystemExit("Stop right there!")
         
     return all_od
+
+
+# In[4]:
+
 
 def map_sp(agent_id):
     
@@ -127,10 +151,12 @@ def map_sp(agent_id):
     if sp_dist > 10e7:
         sp_edges = []
         results = {'agent_id': agent_id, 'route_igraph': sp_edges}
+        sp.clear()
         return results, 'n_a'
     else:
         sp_route = sp.route(destin_ID)
         path = [(current_link_start, current_link_end)] + [(start_sp-1, end_sp-1) for (start_sp, end_sp) in sp_route]
+        sp.clear()
 #         print('map', agent_info[0])
 #         print('map', current_link_end, destin_ID, path)
         results = {'agent_id': agent_id, 'cls': current_link_start, 'cle': current_link_end, 'o_sp': origin_ID, 'd_sp': destin_ID, 'd_tm': depart_time, 'route_igraph': path}
@@ -153,7 +179,7 @@ def route(links_df0, counterflow=False, scen_nm='', simulation_outputs=None):
         return {}
     
     ### Build a pool
-    process_count = 1
+    process_count = 10
     pool = Pool(processes=process_count)
 
     ### Find shortest pathes
@@ -176,12 +202,15 @@ def route(links_df0, counterflow=False, scen_nm='', simulation_outputs=None):
 #     edge_volume[['edge_id_igraph', 'start_igraph', 'end_igraph', 'geometry', 'vol', 'voc']].to_csv(absolute_path+simulation_outputs+'/initial_route_volume_a{}_{}.csv'.format(len(agent_info_routes), scen_nm), index=False)
 
     cannot_arrive = np.sum([1 for i in destination_counts if i=='n_a'])
-    print('{} out of {} cannot arrive.'.format(cannot_arrive, len(agent_info)))
+    # print('{} out of {} cannot arrive.'.format(cannot_arrive, len(agent_info)))
 #     print('routing takes {} sec'.format(t_odsp_1 - t_odsp_0))
 
     new_agent_info = {a['agent_id']: {'o_sp': a['o_sp'], 'd_sp': a['d_sp'], 'd_tm': a['d_tm'], 'cls': a['cls'], 'cle': a['cle'], 'route_igraph': a['route_igraph']} for a in agent_info_routes if len(a['route_igraph'])>0}
     
     return new_agent_info
+
+
+# In[5]:
 
 
 def update_graph(links_attr_dict=None, links_trav_time_dict=None, link_time_lookback_freq=None):
@@ -209,6 +238,9 @@ def update_graph(links_attr_dict=None, links_trav_time_dict=None, link_time_look
 #     print('updating graph takes {} sec'.format(t_update_1 - t_update_0))
 
     return new_links_trav_time_dict
+
+
+# In[6]:
 
 
 def virtual_nodes_links(links_df0, nodes_df0):
@@ -242,6 +274,9 @@ def virtual_nodes_links(links_df0, nodes_df0):
     return links_df, nodes_df
 
 
+# In[7]:
+
+
 def sending_receiving(t, t_scale, links_dict=None, links_attr_dict=None):
 
     t_sending_receiving_0 = time.time()
@@ -262,6 +297,9 @@ def sending_receiving(t, t_scale, links_dict=None, links_attr_dict=None):
 #     print('link model time {} sec'.format(t_sending_receiving_1 - t_sending_receiving_0))
     
     return new_links_dict
+
+
+# In[8]:
 
 
 def nodal_transfer(t=0, t_scale=1, nodes_dict=None, links_dict=None, links_attr_dict=None, links_trav_time_dict=0, node2edge=None, reroute_flag=False):
@@ -400,6 +438,9 @@ def nodal_transfer(t=0, t_scale=1, nodes_dict=None, links_dict=None, links_attr_
     return links_dict, links_trav_time_dict, arrival_list, move, agent_info
 
 
+# In[9]:
+
+
 def load_trips(t, t_scale, links_dict, node2edge):
 
     for a, info in agent_info.items():
@@ -408,6 +449,9 @@ def load_trips(t, t_scale, links_dict, node2edge):
             links_dict[initial_edge]['run'].append([a, t*t_scale])
         
     return links_dict
+
+
+# In[10]:
 
 
 def output_interpolated_positions(t=0, links_dict=None, links_attr_dict=None, simulation_outputs=None):
@@ -452,39 +496,40 @@ def output_interpolated_positions(t=0, links_dict=None, links_attr_dict=None, si
 #     print('output interpolated {} sec'.format(output_interpolated_1 - output_interpolated_0))
 
 
+# In[4]:
+
+
 def main():
     random.seed(0)
     np.random.seed(0)
     global g
     global agent_info
     
-    reroute_flag = True
-    reroute_freq = 5 ### sec
-    link_time_lookback_freq = 10 ### sec
+    reroute_flag = False
+    reroute_freq = 10 ### sec
+    link_time_lookback_freq = 20 ### sec
     counterflow_flag = False
     closure_flag = False
-    phased_flag = True
-    scen_nm = 'base'
-    network_file_edges = '/projects/bay_area/network_inputs/edges_osmnx.csv'
-    network_file_nodes = '/projects/bay_area/network_inputs/nodes_osmnx.csv'
-    demand_files = ['/projects/bay_area/demand_inputs/bay_area_node_level_od_0.csv',
-                  '/projects/bay_area/demand_inputs/bay_area_node_level_od_1.csv',
-                  '/projects/bay_area/demand_inputs/bay_area_node_level_od_2.csv']
-    simulation_outputs = '/projects/bay_area/simulation_outputs'
+    phased_flag = False
+    scen_nm = '3_per_origin_nrr'
+    network_file_edges = '/projects/bolinas_stinson_beach/network_inputs/osm_edges.csv'
+    network_file_nodes = '/projects/bolinas_stinson_beach/network_inputs/osm_nodes.csv'
+    demand_files = ['/projects/bolinas_stinson_beach/demand_inputs/bolinas_od_3_per_origin.csv']
+    simulation_outputs = '/projects/bolinas_stinson_beach/simulation_outputs'
 
     t_scale = 1
 
     g, links_df0, nodes_df0 = network(
-        counterflow=counterflow_flag, 
-        closure=closure_flag, 
+        counterflow = counterflow_flag, 
+        closure = closure_flag, 
         network_file_edges = network_file_edges,
         network_file_nodes = network_file_nodes,
         simulation_outputs = simulation_outputs,
         scen_nm = scen_nm)
+    # return
     od = demand(nodes_df0, 
         phased_flag = phased_flag,
         demand_files = demand_files)
-    print(od[od['agent_id']==302])
     
     links_df, nodes_df = virtual_nodes_links(links_df0, nodes_df0)
     print(links_df.shape, nodes_df.shape, links_df0.shape, nodes_df0.shape)
@@ -493,7 +538,7 @@ def main():
 
     links_attr_dict = {getattr(e, 'edge_id_igraph'): {'fft': getattr(e, 'fft'), 'len': getattr(e, 'length'), 'ty': getattr(e, 'stype'), 'ln': getattr(e, 'lanes'), 's_i': getattr(e, 'start_igraph'), 'e_i': getattr(e, 'end_igraph'), 'geom': getattr(e, 'geometry'), 'in_c': getattr(e, 'capacity'), 'ou_c': getattr(e, 'capacity'), 'st_c': getattr(e, 'store_cap')} for e in links_df.itertuples()}
 
-    # ### signal at entrance to chico
+    ### signal at entrance to chico
     # links_attr_dict[21044]['ou_c'] /= 2
     links_dict = {e: {'run': [], 'queue': []} for e in links_df['edge_id_igraph'].values.tolist()}
     links_trav_time_dict = {e: [] for e in links_df.loc[links_df['stype']=='real', 'edge_id_igraph'].values.tolist()}
@@ -527,18 +572,20 @@ def main():
     total_arrival_count = 0
     total_arrival_list = []
     agent_info = {}
+    track_edges = [295, 543, 596]
+    track_edge_info = []
     
     t_s = 0
-    t_e = 100
+    t_e = 3600
     for t in range(t_s, t_e):
         ### calculate the paths for agents moving in the next 60 seconds
-        if t%reroute_freq == 0:
+        if (t==0) or (reroute_flag) and (t%reroute_freq == 0):
             ### add new agents that are scheduled to leave in the next reroute period
             ### to the remaining agents
             new_od = od.loc[(od['d_tm']>=t//reroute_freq*reroute_freq) & (od['d_tm']<(t//reroute_freq+1)*reroute_freq)]
             for row in new_od.itertuples():
                 agent_info[getattr(row, 'agent_id')] = {'o_sp': getattr(row, 'o_sp'), 'd_sp': getattr(row, 'd_sp'), 'd_tm': getattr(row, 'd_tm'), 'cls': getattr(row, 'cls'), 'cle': getattr(row, 'cle')}
-            print('{} reroutes at time {}, {} newly added'.format(len(agent_info), t, new_od.shape[0]))
+            # print('{} reroutes at time {}, {} newly added'.format(len(agent_info), t, new_od.shape[0]))
             ### update link travel time
             links_trav_time_dict = update_graph(links_attr_dict = links_attr_dict, links_trav_time_dict=links_trav_time_dict, link_time_lookback_freq = link_time_lookback_freq)
             ### route
@@ -548,7 +595,7 @@ def main():
         links_dict = load_trips(t, t_scale, links_dict, node2edge)
         ### link model
         links_dict = sending_receiving(t, t_scale, links_dict=links_dict, links_attr_dict=links_attr_dict)
-        output_interpolated_positions(t=t, links_dict=links_dict, links_attr_dict=links_attr_dict, simulation_outputs=simulation_outputs)
+        # output_interpolated_positions(t=t, links_dict=links_dict, links_attr_dict=links_attr_dict, simulation_outputs=simulation_outputs)
         ### node model
         links_dict, links_trav_time_dict, arrival_list, move, agent_info = nodal_transfer(t=t, t_scale=t_scale, nodes_dict=nodes_dict, links_dict=links_dict, links_attr_dict=links_attr_dict, links_trav_time_dict=links_trav_time_dict, node2edge=node2edge, reroute_flag=reroute_flag)
         total_arrival_count += len(arrival_list)
@@ -557,14 +604,31 @@ def main():
         run_link = len([l for l in links_dict.values() if len(l['run'])>0])
         total_arrival_list.append([t, total_arrival_count, move, queue_veh, queue_link, run_link])
 
-        if t%reroute_freq==0:
+        if t%500==0:
             print(total_arrival_list[-1])
-#             pd.DataFrame([[l, len(v['run']), len(v['queue']), links_attr_dict[l]['geom']] for l, v in links_dict.items()], columns=['edge_id_igraph', 'run', 'queue', 'geom']).to_csv(absolute_path+simulation_outputs+'/run_queue/run_queue_{}_{}s.csv'.format(scen_nm, t), index=False)
+            pd.DataFrame([[l, len(v['run']), len(v['queue']), links_attr_dict[l]['geom']] for l, v in links_dict.items()], columns=['edge_id_igraph', 'run', 'queue', 'geom']).to_csv(absolute_path+simulation_outputs+'/run_queue/run_queue_{}_{}s.csv'.format(scen_nm, t), index=False)
+        
+        ### occupancy of selected edges
+        for t_e in track_edges:
+            track_edge_info.append([t, t_e, l(links_dict[t_e]['run']), l(links_dict[t_e]['queue'])])
 
-#     pd.DataFrame(total_arrival_list, columns=['t_sec', 'tot_arr', 'move', 'q_veh', 'q_l', 'r_l']).to_csv(absolute_path+simulation_outputs+'/arrival_counts/arrival_counts_{}_{}s_{}s.csv'.format(scen_nm, t_s, t_e))
 
-if __name__ == '__main__':
-	main()
+    pd.DataFrame(total_arrival_list, columns=['t_sec', 'tot_arr', 'move', 'q_veh', 'q_l', 'r_l']).to_csv(absolute_path+simulation_outputs+'/arrival_counts/arrival_counts_{}_{}s_{}s.csv'.format(scen_nm, t_s, t_e))
+
+
+# In[11]:
+
+
+main()
+
+
+# In[ ]:
+
+
+get_ipython().system(u'jupyter nbconvert --to script dta_meso_15min_reroute.ipynb')
+
+
+# In[ ]:
 
 
 
