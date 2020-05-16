@@ -1,4 +1,5 @@
 projects/
+removed/
 **/*.csv
 **/*.mtx
 **/*_abm_mp_profile.txt
