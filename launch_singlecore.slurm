@@ -1,19 +1,17 @@
 #!/bin/bash
 #SBATCH -J test_evacuation
-#SBATCH -o job.out
-#SBATCH -e job.err
+#SBATCH -o job_singlecore.out
+#SBATCH -e job_singlecore.err
 #SBATCH -t 02:30:00
 #SBATCH -p skx-normal
-#SBATCH -N 9
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=35
+#SBATCH -N 1 -n 27
 
 module purge
 module load TACC
 module load launcher
 module load python3
 source $HOME/virtualenvs/cities/bin/activate
-export OMP_NUM_THREADS=35
+# export OMP_NUM_THREADS=35
 
 ### folder in $SCRATCH to hold output
 scratch_folder=$SCRATCH/spatial_queue/projects/berkeley/simulation_outputs
@@ -31,8 +29,8 @@ mkdir -p $scratch_folder/link_stats
 
 # Launcher to use multicores on node
 export LAUNCHER_WORKDIR=$PWD
-export LAUNCHER_PPN=1
-export LAUNCHER_JOB_FILE=joblist
+export LAUNCHER_PPN=27
+export LAUNCHER_JOB_FILE=joblist_singlecore
 export LAUNCHER_SCHED=interleaved
 
 $LAUNCHER_DIR/paramrun

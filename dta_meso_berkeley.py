@@ -336,7 +336,7 @@ def route(scen_nm=''):
     logger = logging.getLogger("bk_evac")
     
     ### Build a pool
-    process_count = 35
+    process_count = 40
     pool = Pool(processes=process_count)
 
     ### Find shortest pathes
@@ -407,21 +407,24 @@ def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None
     fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
     fire_frontier = gpd.GeoDataFrame(fire_frontier, crs={'init':'epsg:4326'}, geometry=fire_frontier['geometry'].map(loads))
     def fire_distance(veh_loc, t):
-        t_before = np.max(fire_frontier.loc[fire_frontier['t']<=t, 't'])
-        t_after = np.min(fire_frontier.loc[fire_frontier['t']>t, 't'])
-        fire_frontier_before = fire_frontier.loc[fire_frontier['t']==t_before, 'geometry'].values[0]
-        fire_frontier_after = fire_frontier.loc[fire_frontier['t']==t_after, 'geometry'].values[0]
         [veh_lon, veh_lat] = zip(*veh_loc)
-        veh_fire_dist_before = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_before)
-        veh_fire_dist_after = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_after)
-        veh_fire_dist = veh_fire_dist_before * (t_after-t)/(t_after-t_before) + veh_fire_dist_after * (t-t_before)/(t_after-t_before)
+        if t>=np.max(fire_frontier['t']):
+            fire_frontier_now = fire_frontier.loc[fire_frontier['t'].idxmax(), 'geometry']
+            veh_fire_dist = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_now)
+        else:
+            t_before = np.max(fire_frontier.loc[fire_frontier['t']<=t, 't'])
+            t_after = np.min(fire_frontier.loc[fire_frontier['t']>t, 't'])
+            fire_frontier_before = fire_frontier.loc[fire_frontier['t']==t_before, 'geometry'].values[0]
+            fire_frontier_after = fire_frontier.loc[fire_frontier['t']==t_after, 'geometry'].values[0]
+            veh_fire_dist_before = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_before)
+            veh_fire_dist_after = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_after)
+            veh_fire_dist = veh_fire_dist_before * (t_after-t)/(t_after-t_before) + veh_fire_dist_after * (t-t_before)/(t_after-t_before)
         return np.mean(veh_fire_dist), np.sum(veh_fire_dist<0)
     
-    t_s, t_e = 0, 100#max(3600, dept_time[-1]+2000)
+    t_s, t_e = 0, 12000#max(3600, dept_time[-1]+2000)
     move = 0
     t_stats = []
     for t in range(t_s, t_e):
-    # for t in [0] + list(range(3749, 3753)):
         ### routing
         if (t==0) or (reroute_flag) and (t%reroute_freq == 0):
             ### update link travel time
@@ -437,11 +440,15 @@ def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None
             n_t_move, n_t_key_loc_flow = node.run_node_model(t, transfer_s, transfer_e)
             move += n_t_move
         ### metrics
-        veh_loc = [link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint for agent in agent_id_dict.values() if agent.status != 'arr']
-        avg_fire_dist, neg_dist = fire_distance(veh_loc, t)
-        outside_danger_cnts = outside_firezone(veh_loc, t)
-        arrival_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='arr'] )
-        t_stats.append([t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_danger_cnts])
+        if t%10 == 0:
+            arrival_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='arr'])
+            if arrival_cnts == len(agent_id_dict):
+                logging.info("all agents arrive at destinations")
+                break
+            veh_loc = [link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint for agent in agent_id_dict.values() if agent.status != 'arr']
+            avg_fire_dist, neg_dist = fire_distance(veh_loc, t)
+            outside_danger_cnts = outside_firezone(veh_loc, t)
+            t_stats.append([t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_danger_cnts])
         ### stepped outputs
         if t%100==0:
             link_output = pd.DataFrame([(link.id, len(link.queue_veh), len(link.run_veh), round(link.travel_time, 2)) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'q', 'r', 't'])
