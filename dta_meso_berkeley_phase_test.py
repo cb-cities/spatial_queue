@@ -25,7 +25,6 @@ sys.path.insert(0, home_dir+'/..')
 from sp import interface
 import util.haversine as haversine
 
-
 class Node:
     def __init__(self, id, lon, lat, type, osmid=None):
         self.id = id
@@ -246,6 +245,28 @@ class Agent:
             self.find_route = 'a'
             sp.clear()
 
+### distance to fire starting point
+def fire_point_distance(veh_loc):
+    fire_lon, fire_lat = -122.2502, 37.9068
+    [veh_lon, veh_lat] = zip(*veh_loc)
+    veh_firestart_dist = haversine.haversine(np.array(veh_lat), np.array(veh_lon), fire_lat, fire_lon)
+    return veh_firestart_dist
+### distance to fire frontier
+def fire_frontier_distance(fire_frontier, veh_loc, t):
+    [veh_lon, veh_lat] = zip(*veh_loc)
+    if t>=np.max(fire_frontier['t']):
+        fire_frontier_now = fire_frontier.loc[fire_frontier['t'].idxmax(), 'geometry']
+        veh_fire_dist = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_now)
+    else:
+        t_before = np.max(fire_frontier.loc[fire_frontier['t']<=t, 't'])
+        t_after = np.min(fire_frontier.loc[fire_frontier['t']>t, 't'])
+        fire_frontier_before = fire_frontier.loc[fire_frontier['t']==t_before, 'geometry'].values[0]
+        fire_frontier_after = fire_frontier.loc[fire_frontier['t']==t_after, 'geometry'].values[0]
+        veh_fire_dist_before = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_before)
+        veh_fire_dist_after = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_after)
+        veh_fire_dist = veh_fire_dist_before * (t_after-t)/(t_after-t_before) + veh_fire_dist_after * (t-t_before)/(t_after-t_before)
+    return np.mean(veh_fire_dist), np.sum(veh_fire_dist<0)
+
 def network(network_file_edges=None, network_file_nodes=None, simulation_outputs=None, scen_nm=''):
     logger = logging.getLogger("bk_evac")
 
@@ -291,13 +312,16 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     return g, nodes, links
 
 
-def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=0):
+def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=0, phase_scale=None):
     logger = logging.getLogger("bk_evac")
 
     all_od_list = []
     [dept_time_mean, dept_time_std, dept_time_min, dept_time_max] = dept_time
     for demand_file in demand_files:
         od = pd.read_csv(work_dir + demand_file)
+        ### transform OSM based id to graph node id
+        od['origin_nid'] = od['o_osmid'].apply(lambda x: nodes_osmid_dict[x])
+        od['destin_nid'] = od['d_osmid'].apply(lambda x: nodes_osmid_dict[x])
         ### assign agent id
         if 'agent_id' not in od.columns: od['agent_id'] = np.arange(od.shape[0])
         ### assign departure time. dept_time_std == 0 --> everyone leaves at the same time
@@ -306,28 +330,31 @@ def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=
             truncnorm_a, truncnorm_b = (dept_time_min-dept_time_mean)/dept_time_std, (dept_time_max-dept_time_mean)/dept_time_std
             od['dept_time'] = truncnorm.rvs(truncnorm_a, truncnorm_b, loc=dept_time_mean, scale=dept_time_std, size=od.shape[0])
             od['dept_time'] = od['dept_time'].astype(int)
+        if phase_scale is not None:
+            dist_unit, phase_min = phase_scale.split("-")
+            dist_unit = int(dist_unit)
+            phase_min = int(phase_min)
+            od['o_lon'] = od['origin_nid'].apply(lambda x: node_id_dict[x].lon)
+            od['o_lat'] = od['origin_nid'].apply(lambda x: node_id_dict[x].lat)
+            od['fire_point_dist'] = fire_point_distance(zip(od['o_lon'], od['o_lat']))
+            od['phase_offset'] = od['fire_point_dist'].apply(lambda x: min(25, max(0,(x-1000)//dist_unit))*phase_min*60) ### every 1000m from the fire start point, leave later phase_scale min
+            od['dept_time'] += od['phase_offset']
         ### assign vehicle length
         od['veh_len'] = np.random.choice([8, 18], size=od.shape[0], p=[1-tow_pct, tow_pct])
-        ### transform OSM based id to graph node id
-        od['origin_nid'] = od['o_osmid'].apply(lambda x: nodes_osmid_dict[x])
-        od['destin_nid'] = od['d_osmid'].apply(lambda x: nodes_osmid_dict[x])
         all_od_list.append(od)
 
     all_od = pd.concat(all_od_list, sort=False, ignore_index=True)
     all_od = all_od.sample(frac=1).reset_index(drop=True) ### randomly shuffle rows
     logging.info('total numbers of agents from file {}'.format(all_od.shape))
-    # all_od = all_od.iloc[0:300].copy()
+    # all_od = all_od.iloc[0:3000].copy()
     logging.info('total numbers of agents taken {}'.format(all_od.shape))
 
     agents = []
     for row in all_od.itertuples():
-        agents.append(Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len')))
-        
+        agents.append(Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len')))    
     return agents
 
-
 def map_sp(agent_id):
-    
     subp_agent = agent_id_dict[agent_id]
     subp_agent.get_path()
     return (agent_id, subp_agent)
@@ -358,7 +385,7 @@ def route(scen_nm=''):
     return t_odsp_1-t_odsp_0, len(map_agent)
 
 
-def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None, tow_pct=None, transfer_s=None, transfer_e=None):
+def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None, tow_pct=None, phase_scale=None, transfer_s=None, transfer_e=None):
     ### logging and global variables
     random.seed(random_seed)
     np.random.seed(random_seed)
@@ -373,7 +400,7 @@ def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None
     demand_files = ["/projects/berkeley/demand_inputs/od.csv"]
     simulation_outputs = '/projects/berkeley/simulation_outputs'
 
-    scen_nm = 'rs{}_r{}_f{}_dt{}_tow{}'.format(random_seed, reroute_flag, fire_speed, dept_time_id, tow_pct)
+    scen_nm = 'rs{}_r{}_f{}_dt{}_ps{}_tow{}'.format(random_seed, reroute_flag, fire_speed, dept_time_id, phase_scale, tow_pct)
     logger = logging.getLogger("bk_evac")
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
     logging.info(scen_nm)
@@ -393,35 +420,15 @@ def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None
         node.calculate_straight_ahead_links()
     
     ### demand
-    agents = demand(nodes_osmid_dict, dept_time=dept_time, demand_files = demand_files, tow_pct=tow_pct)
+    agents = demand(nodes_osmid_dict, dept_time=dept_time, demand_files = demand_files, tow_pct=tow_pct, phase_scale=phase_scale)
     agent_id_dict = {agent.id: agent for agent in agents}
 
-    ### fire distance
-    def outside_firezone(veh_loc, t):
-        fire_lon, fire_lat = -122.2502, 37.9068
-        [veh_lon, veh_lat] = zip(*veh_loc)
-        veh_firestart_dist = haversine.haversine(np.array(veh_lat), np.array(veh_lon), fire_lat, fire_lon)
-        return np.sum(veh_firestart_dist>5000)
-    ### fire distance
+    ### fire growth
     fire_frontier = pd.read_csv(open(work_dir + '/projects/berkeley/demand_inputs/fire_fitted_ellipse.csv'))
     fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
     fire_frontier = gpd.GeoDataFrame(fire_frontier, crs={'init':'epsg:4326'}, geometry=fire_frontier['geometry'].map(loads))
-    def fire_distance(veh_loc, t):
-        [veh_lon, veh_lat] = zip(*veh_loc)
-        if t>=np.max(fire_frontier['t']):
-            fire_frontier_now = fire_frontier.loc[fire_frontier['t'].idxmax(), 'geometry']
-            veh_fire_dist = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_now)
-        else:
-            t_before = np.max(fire_frontier.loc[fire_frontier['t']<=t, 't'])
-            t_after = np.min(fire_frontier.loc[fire_frontier['t']>t, 't'])
-            fire_frontier_before = fire_frontier.loc[fire_frontier['t']==t_before, 'geometry'].values[0]
-            fire_frontier_after = fire_frontier.loc[fire_frontier['t']==t_after, 'geometry'].values[0]
-            veh_fire_dist_before = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_before)
-            veh_fire_dist_after = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_after)
-            veh_fire_dist = veh_fire_dist_before * (t_after-t)/(t_after-t_before) + veh_fire_dist_after * (t-t_before)/(t_after-t_before)
-        return np.mean(veh_fire_dist), np.sum(veh_fire_dist<0)
     
-    t_s, t_e = 0, 12000#max(3600, dept_time[-1]+2000)
+    t_s, t_e = 0, 12000
     move = 0
     t_stats = []
     for t in range(t_s, t_e):
@@ -446,14 +453,14 @@ def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None
                 logging.info("all agents arrive at destinations")
                 break
             veh_loc = [link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint for agent in agent_id_dict.values() if agent.status != 'arr']
-            avg_fire_dist, neg_dist = fire_distance(veh_loc, t)
-            outside_danger_cnts = outside_firezone(veh_loc, t)
+            avg_fire_dist, neg_dist = fire_frontier_distance(fire_frontier, veh_loc, t)
+            outside_danger_cnts = np.sum(fire_point_distance(veh_loc)>5000)
             t_stats.append([t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_danger_cnts])
         ### stepped outputs
         if t%300==0:
             link_output = pd.DataFrame([(link.id, len(link.queue_veh), len(link.run_veh), round(link.travel_time, 2)) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'q', 'r', 't'])
             link_output[(link_output['q']>0) | (link_output['r']>0)].reset_index(drop=True).to_csv(scratch_dir + simulation_outputs + '/link_stats/link_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
-        if t%300==0: 
+        if t%100==0: 
             logging.info(" ".join([str(i) for i in t_stats[-1]]) + " " + str(len(veh_loc)))
     
     pd.DataFrame(t_stats, columns=['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_cnts']).to_csv(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), index=False)

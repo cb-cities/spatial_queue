@@ -1,11 +1,12 @@
-rm -f joblist_singlecore
-touch joblist_singlecore
+rm -f joblist_phase_scale
+touch joblist_phase_scale
 
 declare -a random_seed_arr=("0")
-declare -a reroute_flag_arr=("1")
-declare -a fire_speed_arr=("0.5" "1" "2")
-declare -a dept_time_id_arr=(\"imm\" \"slw\" \"fst\")
-declare -a tow_pct_arr=("0" "0.05" "0.1")
+declare -a reroute_flag_arr=("0")
+declare -a fire_speed_arr=("1") ##("0.5" "1" "2")
+declare -a dept_time_id_arr=(\"imm\") ## (\"imm\" \"slw\" \"fst\")
+declare -a phase_scale_arr=(\"100-0\" \"100-5\" \"100-10\" \"500-0\" \"500-5\" \"500-10\" \"1000-0\" \"1000-5\" \"1000-10\")
+declare -a tow_pct_arr=("0") ##("0" "0.05" "0.1")
 
 for rs in "${random_seed_arr[@]}"
 do
@@ -15,9 +16,12 @@ do
         do
             for dt in "${dept_time_id_arr[@]}"
             do
-                for tow in "${tow_pct_arr[@]}"
+                for ps in "${phase_scale_arr[@]}"
                 do
-                    echo "python3 -c 'import dta_meso_berkeley; dta_meso_berkeley.main(random_seed=$rs, reroute_flag=$r, fire_speed=$f, dept_time_id=$dt, tow_pct=$tow)'" >> joblist_singlecore
+                    for tow in "${tow_pct_arr[@]}"
+                    do
+                        echo "python3 -c 'import dta_meso_berkeley_phase_test; dta_meso_berkeley_phase_test.main(random_seed=$rs, reroute_flag=$r, fire_speed=$f, dept_time_id=$dt, phase_scale=$ps, tow_pct=$tow)'" >> joblist_phase_scale
+                    done                
                 done
             done
         done
