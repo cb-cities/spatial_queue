@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -J test_evacuation
-#SBATCH -o job_multicore.out
-#SBATCH -e job_multicore.err
-#SBATCH -t 04:30:00
+#SBATCH -o job_counterflow.out
+#SBATCH -e job_counterflow.err
+#SBATCH -t 06:30:00
 #SBATCH -p skx-normal
-#SBATCH -N 9
+#SBATCH -N 1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=40
 
@@ -32,7 +32,7 @@ mkdir -p $scratch_folder/link_stats
 # Launcher to use multicores on node
 export LAUNCHER_WORKDIR=$PWD
 export LAUNCHER_PPN=1
-export LAUNCHER_JOB_FILE=joblist_multicore
+export LAUNCHER_JOB_FILE=joblist_counterflow
 export LAUNCHER_SCHED=interleaved
 
 $LAUNCHER_DIR/paramrun

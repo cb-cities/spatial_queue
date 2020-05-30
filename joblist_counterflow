@@ -1,0 +1,6 @@
+python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=0, reroute_flag=0, fire_speed=1, dept_time_id="imm", phase_scale="1000-0", counterflow=0, tow_pct=0)'
+python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=0, reroute_flag=0, fire_speed=1, dept_time_id="imm", phase_scale="1000-0", counterflow="ms", tow_pct=0)'
+python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=0, reroute_flag=0, fire_speed=1, dept_time_id="imm", phase_scale="1000-0", counterflow="st", tow_pct=0)'
+python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=5, reroute_flag=0, fire_speed=1, dept_time_id="imm", phase_scale="1000-0", counterflow=0, tow_pct=0)'
+python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=5, reroute_flag=0, fire_speed=1, dept_time_id="imm", phase_scale="1000-0", counterflow="ms", tow_pct=0)'
+python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=5, reroute_flag=0, fire_speed=1, dept_time_id="imm", phase_scale="1000-0", counterflow="st", tow_pct=0)'

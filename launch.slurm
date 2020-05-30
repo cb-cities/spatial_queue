@@ -38,4 +38,4 @@ export LAUNCHER_SCHED=interleaved
 $LAUNCHER_DIR/paramrun
 
 cd $scratch_folder
-tar czf ../simulation_outputs_$(date +"%FT%H%M%S").tar.gz simulation_outputs
+tar czf ../t_stats_$(date +"%FT%H%M%S").tar.gz t_stats

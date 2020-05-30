@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -J test_evacuation
-#SBATCH -o job_phase_test.out
-#SBATCH -e job_phase_test.err
-#SBATCH -t 03:30:00
+#SBATCH -o job_counterflow.out
+#SBATCH -e job_counterflow.err
+#SBATCH -t 06:30:00
 #SBATCH -p skx-normal
-#SBATCH -N 1 -n 9
+#SBATCH -N 1 -n 6
 
 module purge
 module load TACC
@@ -29,11 +29,11 @@ mkdir -p $scratch_folder/link_stats
 
 # Launcher to use multicores on node
 export LAUNCHER_WORKDIR=$PWD
-export LAUNCHER_PPN=9
-export LAUNCHER_JOB_FILE=joblist_phase_scale
+export LAUNCHER_PPN=6
+export LAUNCHER_JOB_FILE=joblist_counterflow
 export LAUNCHER_SCHED=interleaved
 
 $LAUNCHER_DIR/paramrun
 
 cd $scratch_folder
-tar czf ../simulation_outputs_$(date +"%FT%H%M%S").tar.gz simulation_outputs
+tar czf ../t_stats_$(date +"%FT%H%M%S").tar.gz t_stats
