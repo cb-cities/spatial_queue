@@ -8,6 +8,7 @@ declare -a dept_time_id_arr=(\"imm\") ## (\"imm\" \"slw\" \"fst\")
 declare -a phase_scale_arr=(\"1000-0\") ## (\"100-0\" \"100-5\" \"100-10\" \"500-0\" \"500-5\" \"500-10\" \"1000-0\" \"1000-5\" \"1000-10\")
 declare -a cf_arr=("0" \"ms\" \"st\")
 declare -a tow_pct_arr=("0") ##("0" "0.05" "0.1")
+asnm=(\"node\")
 
 for rs in "${random_seed_arr[@]}"
 do
@@ -23,7 +24,7 @@ do
                     do
                         for tow in "${tow_pct_arr[@]}"
                         do
-                            echo "python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=$rs, reroute_flag=$r, fire_speed=$f, dept_time_id=$dt, phase_scale=$ps, counterflow=$cf, tow_pct=$tow)'" >> joblist_counterflow
+                            echo "python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=$rs, reroute_flag=$r, fire_speed=$f, dept_time_id=$dt, phase_scale=$ps, counterflow=$cf, tow_pct=$tow, asnm=$asnm)'" >> joblist_counterflow
                         done  
                     done              
                 done

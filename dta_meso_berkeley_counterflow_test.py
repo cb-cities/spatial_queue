@@ -75,15 +75,25 @@ class Node:
             go_vehs_list.append([agent_id, agent_next_node, go_link.id, ol, agent_dir])
         return go_vehs_list
 
-    def non_conflict_vehs(self):
+    def non_conflict_vehs(self, t_now):
+        logger = logging.getLogger("bk_evac")
+        global both_links, choose_spruce
         self.go_vehs = []
         ### a primary direction
-         = [l for l in self.in_links.keys() if len(link_id_dict[l].queue_veh)>0]
-        if self.id == 1626: print(self.in_links.keys())
+        in_links = [l for l in self.in_links.keys() if len(link_id_dict[l].queue_veh)>0]
+        # if self.id == 1626: print(t_now, in_links)
+        
         if len(in_links) == 0: return
         go_link = link_id_dict[random.choice(in_links)]
+        # if self.id == 1626: print(t_now, go_link, self.in_links[go_link.id])
+        if (28224 in in_links) and (19355 in in_links):
+            both_links += 1
+            if go_link.id == 28224: choose_spruce += 1
+            logging.info("\n" + str(t_now) + " " + " ".join([str(l) for l in in_links]) + " " + str(both_links) + " " + str(choose_spruce))
         go_vehs_list = self.find_go_vehs(go_link)
         self.go_vehs += go_vehs_list
+        # if self.id == 1626: print(t_now, self.go_vehs[0])
+        
         ### a non-conflicting direction
         if (np.min([veh[-1] for veh in go_vehs_list])<-45) or (go_link.type=='v'): return ### no opposite veh allows to move if there is left turn veh in the primary direction; or if the primary incoming link is a virtual link
         if self.in_links[go_link.id] == None: return ### no straight ahead opposite links
@@ -96,11 +106,13 @@ class Node:
         self.go_vehs += [veh for veh in op_go_vehs_list if veh[-1]>-45] ### only straight ahead or right turns allowed for vehicles from the opposite side
 
     def run_node_model(self, t_now, transfer_s, transfer_e):
-        self.non_conflict_vehs()
+        logger = logging.getLogger("bk_evac")
+        self.non_conflict_vehs(t_now=t_now)
         node_move = 0
         spruce_flow = 0
         hearst_flow = 0
         other_flow = 0 
+        if self.id == 1626: logging.info("all " + " ".join([str(item) for go_veh in self.go_vehs for item in go_veh]))
         ### Agent reaching destination
         for [agent_id, next_node, il, ol, agent_dir] in self.go_vehs:
             veh_len = agent_id_dict[agent_id].veh_len
@@ -114,8 +126,11 @@ class Node:
                     if il == 28224: spruce_flow += 1
                     elif il == 19355: hearst_flow += 1
                     else: other_flow += 1
+                    logging.info(str(t_now) + str(agent_id) + str(next_node) + str(il) + str(ol) + str(agent_dir) + 'arr')
             ### no storage capacity downstream
             elif link_id_dict[ol].st_c < veh_len:
+                if self.id == 1626: ### hearst spruce intersection
+                    logging.info(str(il) + ' spillback')
                 pass ### no blocking, as # veh = # lanes
             ### inlink-sending, outlink-receiving both permits
             elif (link_id_dict[il].ou_c >= 1) & (link_id_dict[ol].in_c >= 1):
@@ -128,6 +143,7 @@ class Node:
                     if il == 28224: spruce_flow += 1
                     elif il == 19355: hearst_flow += 1
                     else: other_flow += 1
+                    logging.info(str(t_now) + str(agent_id) + str(next_node) + str(il) + str(ol) + str(agent_dir) + 'flow')
             ### either inlink-sending or outlink-receiving or both exhaust
             else:
                 control_cap = min(link_id_dict[il].ou_c, link_id_dict[ol].in_c)
@@ -142,8 +158,17 @@ class Node:
                         if il == 28224: spruce_flow += 1
                         elif il == 19355: hearst_flow += 1
                         else: other_flow += 1
+                        logging.info(str(t_now) +" "+ str(agent_id) +" "+ str(next_node) +" "+ str(il) +" "+ str(ol) +" "+ str(agent_dir) +" "+ 'chance' +" "+ str(link_id_dict[il].ou_c) +" "+ str(link_id_dict[ol].in_c) +" "+ str(toss_coin[0]))
                 else:
-                    pass
+                    if self.id == 1626: ### hearst spruce intersection
+                        logging.info("toss F " + str(t_now) +" "+ str(agent_id) +" "+ str(il) +" "+ str(ol) +" "+  str(link_id_dict[il].ou_c) +" "+ str(link_id_dict[ol].in_c) +" "+ str(toss_coin[0]) )
+                    if link_id_dict[il].ou_c < link_id_dict[ol].in_c:
+                       link_id_dict[il].ou_c = max(0, link_id_dict[il].ou_c-1)
+                    elif link_id_dict[ol].in_c < link_id_dict[il].ou_c:
+                        link_id_dict[ol].in_c = max(0, link_id_dict[ol].in_c-1)
+                    else:
+                        link_id_dict[il].ou_c -= 1
+                        link_id_dict[ol].in_c -= 1
         return node_move, spruce_flow, hearst_flow, other_flow
 
 class Link:
@@ -414,13 +439,17 @@ def route(scen_nm=''):
     return t_odsp_1-t_odsp_0, len(map_agent)
 
 
-def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None, tow_pct=None, phase_scale=None, counterflow=None, transfer_s=None, transfer_e=None):
+def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None, tow_pct=None, phase_scale=None, counterflow=None, transfer_s=None, transfer_e=None, asnm=''):
     ### logging and global variables
     random.seed(random_seed)
     np.random.seed(random_seed)
     dept_time_dict = {'imm': [0,0,0,1000], 'fst': [15*60,10*60,5*60,25*60], 'slw': [60*60,30*60,30*60,90*60]}
     dept_time = dept_time_dict[dept_time_id]
     global g, agent_id_dict, node_id_dict, link_id_dict, node2link_dict
+
+    global both_links, choose_spruce
+    both_links = 0
+    choose_spruce = 0
     
     reroute_freq = 10 ### sec
     link_time_lookback_freq = 20 ### sec
@@ -435,7 +464,7 @@ def main(random_seed=None, reroute_flag=None, fire_speed=None, dept_time_id=None
     else:
         cf_files = []
 
-    scen_nm = 'rs{}_r{}_f{}_dt{}_ps{}_tow{}_cf{}'.format(random_seed, reroute_flag, fire_speed, dept_time_id, phase_scale, tow_pct, counterflow)
+    scen_nm = 'rs{}_r{}_f{}_dt{}_ps{}_tow{}_cf{}_a{}'.format(random_seed, reroute_flag, fire_speed, dept_time_id, phase_scale, tow_pct, counterflow, asnm)
     logger = logging.getLogger("bk_evac")
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
     logging.info(scen_nm)

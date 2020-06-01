@@ -2,9 +2,9 @@
 #SBATCH -J test_evacuation
 #SBATCH -o job_counterflow.out
 #SBATCH -e job_counterflow.err
-#SBATCH -t 06:30:00
+#SBATCH -t 03:30:00
 #SBATCH -p skx-normal
-#SBATCH -N 1 -n 6
+#SBATCH -N 1 -n 3
 
 module purge
 module load TACC
@@ -29,7 +29,7 @@ mkdir -p $scratch_folder/link_stats
 
 # Launcher to use multicores on node
 export LAUNCHER_WORKDIR=$PWD
-export LAUNCHER_PPN=6
+export LAUNCHER_PPN=3
 export LAUNCHER_JOB_FILE=joblist_counterflow
 export LAUNCHER_SCHED=interleaved
 
