@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -J test_evacuation
-#SBATCH -o job_counterflow.out
-#SBATCH -e job_counterflow.err
-#SBATCH -t 03:30:00
+#SBATCH -o out_phase_cf_r0.out
+#SBATCH -e err_phase_cf_r0.err
+#SBATCH -t 02:30:00
 #SBATCH -p skx-normal
-#SBATCH -N 1 -n 3
+#SBATCH -N 1 -n 6
 
 module purge
 module load TACC
@@ -20,17 +20,10 @@ mkdir -p $scratch_folder/log
 mkdir -p $scratch_folder/t_stats
 mkdir -p $scratch_folder/link_stats
 
-# rm -f joblist
-# touch joblist
-# echo "python3 -c 'import dta_meso_berkeley; dta_meso_berkeley.main(random_seed=0, reroute_flag=0, fire_speed=1, dept_time_id=\"imm\", tow_pct=0)'" >> joblist
-# echo "python3 -c 'import dta_meso_berkeley; dta_meso_berkeley.main(random_seed=1, reroute_flag=0, fire_speed=1, dept_time_id=\"imm\", tow_pct=0)'" >> joblist
-# echo "python3 -c 'import dta_meso_berkeley; dta_meso_berkeley.main(random_seed=3, reroute_flag=0, fire_speed=1, dept_time_id=\"imm\", tow_pct=0)'" >> joblist
-# echo "python3 -c 'import dta_meso_berkeley; dta_meso_berkeley.main(random_seed=4, reroute_flag=0, fire_speed=1, dept_time_id=\"imm\", tow_pct=0)'" >> joblist
-
 # Launcher to use multicores on node
 export LAUNCHER_WORKDIR=$PWD
-export LAUNCHER_PPN=3
-export LAUNCHER_JOB_FILE=joblist_counterflow
+export LAUNCHER_PPN=6
+export LAUNCHER_JOB_FILE=joblist_cf_r0
 export LAUNCHER_SCHED=interleaved
 
 $LAUNCHER_DIR/paramrun

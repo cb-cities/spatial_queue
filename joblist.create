@@ -1,30 +1,40 @@
-rm -f joblist_counterflow
-touch joblist_counterflow
+rm -f joblist_cf_r1
+touch joblist_cf_r1
 
-declare -a random_seed_arr=("0" "5")
-declare -a reroute_flag_arr=("0") ## "0" "1"
-declare -a fire_speed_arr=("1") ##("0.5" "1" "2")
-declare -a dept_time_id_arr=(\"imm\") ## (\"imm\" \"slw\" \"fst\")
-declare -a phase_scale_arr=(\"1000-0\") ## (\"100-0\" \"100-5\" \"100-10\" \"500-0\" \"500-5\" \"500-10\" \"1000-0\" \"1000-5\" \"1000-10\")
-declare -a cf_arr=("0" \"ms\" \"st\")
-declare -a tow_pct_arr=("0") ##("0" "0.05" "0.1")
-asnm=(\"node\")
+declare -a random_seed_arr=("0" "5" "10")
+
+declare -a fire_speed_arr=("0.5") ##("0.5" "1" "2")
+
+declare -a dept_time_id_arr=(\"fst\") ###(\"imm\" \"slw\" \"mid\" \"fst\")
+
+declare -a tow_pct_arr=("0")    ###("0" "0.05" "0.1")
+
+declare -a hh_veh_arr=(\"survey\") ###(\"survey\" "1" "3")
+
+declare -a reroute_flag_arr=("1") ## "0" "1"
+
+declare -a phase_scale_arr=(\"500-5\")   ###(\"500-0\" \"500-5\" \"500-10\" \"500-15\" \"1000-5\" \"1000-10\" \"1000-15\" \"1500-5\" \"1500-10\" \"1500-15\") ### (\"500-0\" \"500-5\" \"500-10\" \"500-15\" \"1000-5\" \"1000-10\" \"1000-15\" \"1500-5\" \"1500-10\" \"1500-15\")
+
+declare -a cf_arr=("0" \"ms\" \"st\")   ###("0" \"ms\" \"st\")
 
 for rs in "${random_seed_arr[@]}"
 do
-    for r in "${reroute_flag_arr[@]}"
+    for f in "${fire_speed_arr[@]}"      
     do
-        for f in "${fire_speed_arr[@]}"
+        for dt in "${dept_time_id_arr[@]}"
         do
-            for dt in "${dept_time_id_arr[@]}"
+            for tow in "${tow_pct_arr[@]}"
             do
-                for ps in "${phase_scale_arr[@]}"
+                for hh_veh in  "${hh_veh_arr[@]}"  
                 do
-                    for cf in "${cf_arr[@]}"
+                    for r in "${reroute_flag_arr[@]}"   
                     do
-                        for tow in "${tow_pct_arr[@]}"
+                        for ps in "${phase_scale_arr[@]}"
                         do
-                            echo "python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=$rs, reroute_flag=$r, fire_speed=$f, dept_time_id=$dt, phase_scale=$ps, counterflow=$cf, tow_pct=$tow, asnm=$asnm)'" >> joblist_counterflow
+                            for cf in "${cf_arr[@]}"
+                            do 
+                                echo "python3 -c 'import dta_meso_berkeley_counterflow_test; dta_meso_berkeley_counterflow_test.main(random_seed=$rs, fire_speed=$f, dept_time_id=$dt, tow_pct=$tow, hh_veh=$hh_veh, reroute_flag=$r, phase_scale=$ps, counterflow=$cf)'" >> joblist_cf_r1
+                            done
                         done  
                     done              
                 done
