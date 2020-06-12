@@ -377,9 +377,6 @@ def route(scen_nm=''):
     return t_odsp_1-t_odsp_0, len(map_agent)
 
 
-# In[27]:
-
-
 def main(random_seed=0, reroute_flag=False, transfer_s=None, transfer_e=None, node_demand=None, dept_time=[0,0,0,1000], tow_pct=0, fire_speed=1, scen_nm='base'):
     random.seed(random_seed)
     np.random.seed(random_seed)
@@ -467,24 +464,22 @@ def main(random_seed=0, reroute_flag=False, transfer_s=None, transfer_e=None, no
     
     pd.DataFrame(t_stats, columns=['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_cnts']).to_csv(absolute_path+simulation_outputs+'/t_stats/t_stats_{}.csv'.format(scen_nm), index=False)
 
+if __name__ == '__main__':
 
-# In[21]:
+    dept_time_dict = {'imm': [0,0,0,1000], 'fst': [15*60,10*60,5*60,25*60], 'slw': [60*60,30*60,30*60,90*60]}
+    main(reroute_flag=0, fire_speed=1, dept_time=dept_time_dict['imm'], tow_pct=0)
+    # for fire_speed in [0.5, 1, 2]:
+    #     for dept_time_id in ['imm', 'fst', 'slw']:
+    #         for tow_pct in [0, 0.05, 0.1]:
+    #             for reroute_flag in [0]:
+    #                 scen_nm = 'r{}_f{}_dt{}_tow{}'.format(reroute_flag, fire_speed, dept_time_id, tow_pct)
+    #                 if dept_time_id=='imm': continue
+    #                 main(reroute_flag=reroute_flag, fire_speed=fire_speed, dept_time=dept_time_dict[dept_time_id], tow_pct=tow_pct, scen_nm=scen_nm)
 
-dept_time_dict = {'imm': [0,0,0,1000], 'fst': [15*60,10*60,5*60,25*60], 'slw': [60*60,30*60,30*60,90*60]}
-main(reroute_flag=0, fire_speed=1, dept_time=dept_time_dict['imm'], tow_pct=0)
-# for fire_speed in [0.5, 1, 2]:
-#     for dept_time_id in ['imm', 'fst', 'slw']:
-#         for tow_pct in [0, 0.05, 0.1]:
-#             for reroute_flag in [0]:
-#                 scen_nm = 'r{}_f{}_dt{}_tow{}'.format(reroute_flag, fire_speed, dept_time_id, tow_pct)
-#                 if dept_time_id=='imm': continue
-#                 main(reroute_flag=reroute_flag, fire_speed=fire_speed, dept_time=dept_time_dict[dept_time_id], tow_pct=tow_pct, scen_nm=scen_nm)
+    # %load_ext line_profiler
+    # %lprun -f main main()
+    main(reroute_flag=reroute_flag, fire_speed=fire_speed, dept_time=dept_time_dict[dept_time_id], tow_pct=tow_pct, scen_nm=scen_nm)
 
-# %load_ext line_profiler
-# %lprun -f main main()
-
-
-# In[ ]:
 
 
 
