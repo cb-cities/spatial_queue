@@ -114,6 +114,8 @@ class Node:
                 ### before move agent as it uses the old agent.cl_enter_time
                 link_id_dict[il].send_veh(t_now, agent_id)
                 n_t_key_loc_flow += agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'arr', il, ol, transfer_s, transfer_e)
+                if self.id == 1626: ### hearst spruce intersection
+                    print(il, type(il))
             ### no storage capacity downstream
             elif link_id_dict[ol].st_c < veh_len:
                 pass ### no blocking, as # veh = # lanes
@@ -124,6 +126,8 @@ class Node:
                 link_id_dict[il].send_veh(t_now, agent_id)
                 n_t_key_loc_flow += agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'flow', il, ol, transfer_s, transfer_e)
                 link_id_dict[ol].receive_veh(agent_id)
+                if self.id == 1626: ### hearst spruce intersection
+                    print(il, type(il))
             ### either inlink-sending or outlink-receiving or both exhaust
             else:
                 control_cap = min(link_id_dict[il].ou_c, link_id_dict[ol].in_c)
@@ -134,6 +138,8 @@ class Node:
                     link_id_dict[il].send_veh(t_now, agent_id)
                     n_t_key_loc_flow += agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'chance', il, ol, transfer_s, transfer_e)
                     link_id_dict[ol].receive_veh(agent_id)
+                    if self.id == 1626: ### hearst spruce intersection
+                        print(il, type(il))
                 else:
                     pass
         return node_move, n_t_key_loc_flow
