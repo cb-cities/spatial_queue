@@ -22,6 +22,19 @@ simulation_outputs = absolute_path + '/projects/bolinas_stinson_beach/simulation
 network_file_edges_expanded = simulation_outputs+'/links_expanded.csv'
 visualization_outputs = absolute_path + '/projects/bolinas_stinson_beach/visualization_outputs'
 
+def veh_offset(x1, y1, x2, y2):
+    # tangential slope approximation
+    tangent = (x2-x1, y2-y1)
+    perp = (y2-y1, -(x2-x1))
+    mode = np.sqrt(perp[0]**2+perp[1]**2)
+    mid_x = (x1 + x2) / 2
+    mid_y = (y1 + y2) / 2
+
+    delta_x = perp[0]/mode*3
+    delta_y = perp[1]/mode*3
+
+    return (mid_x + delta_x, mid_y + delta_y), (tangent[0]/mode, tangent[1]/mode)
+
 def snapshot(t, game_veh_id, current_link_id, link_detailed_dict, road_gdf):
 
     ### road info
@@ -42,8 +55,9 @@ def snapshot(t, game_veh_id, current_link_id, link_detailed_dict, road_gdf):
         ### waiting
         if link_id[0] == 'n':
             for (w_veh_id, cl_enter_time) in link_detailed_dict[link_id]['queue']+link_detailed_dict[link_id]['run']:
-                w_veh_coord = link_geom.interpolate(0.9, normalized=True)
-                veh_list.append([w_veh_id, 'w', w_veh_coord.x, w_veh_coord.y])
+                w_veh_coord_0 = link_geom.interpolate(0, normalized=True)
+                w_veh_coord_1 = link_geom.interpolate(1, normalized=True)
+                veh_list.append([w_veh_id, 'w', link_id, w_veh_coord_1.x, w_veh_coord_1.y, 0, 0])
             continue
 
         ### queuing
@@ -53,8 +67,10 @@ def snapshot(t, game_veh_id, current_link_id, link_detailed_dict, road_gdf):
         for (q_veh_id, cl_enter_time) in link_detailed_dict[link_id]['queue']:
             q_veh_loc = queue_end
             queue_end = max(queue_end-8, 4)
-            q_veh_coord = link_geom.interpolate(q_veh_loc/link_length, normalized=True)
-            veh_list.append([q_veh_id, 'q', q_veh_coord.x, q_veh_coord.y])
+            q_veh_coord_1 = link_geom.interpolate(q_veh_loc/link_length-0.001, normalized=True)
+            q_veh_coord_2 = link_geom.interpolate(q_veh_loc/link_length+0.001, normalized=True)
+            q_veh_coord_offset, q_veh_dir = veh_offset(q_veh_coord_1.x, q_veh_coord_1.y, q_veh_coord_2.x, q_veh_coord_2.y)
+            veh_list.append([q_veh_id, 'q', link_id, q_veh_coord_offset[0], q_veh_coord_offset[1], q_veh_dir[0], q_veh_dir[1]])
 
         ### running
         for (r_veh_id, cl_enter_time) in link_detailed_dict[link_id]['run']:
@@ -64,10 +80,18 @@ def snapshot(t, game_veh_id, current_link_id, link_detailed_dict, road_gdf):
             else:
                 r_veh_loc = link_length*(t-cl_enter_time)/link_fft
             r_veh_loc = max(r_veh_loc, 4)
-            r_veh_coord = link_geom.interpolate(r_veh_loc/link_length, normalized=True)
-            veh_list.append([r_veh_id, 'r', r_veh_coord.x, r_veh_coord.y])
-    veh_df = pd.DataFrame(veh_list, columns=['veh_id', 'status', 'lon', 'lat'])
-    veh_gdf = gpd.GeoDataFrame(veh_df, crs='epsg:26910', geometry=gpd.points_from_xy(veh_df.lon, veh_df.lat))
+            r_veh_coord_1 = link_geom.interpolate(r_veh_loc/link_length-0.001, normalized=True)
+            r_veh_coord_2 = link_geom.interpolate(r_veh_loc/link_length+0.001, normalized=True)
+            r_veh_coord_offset, r_veh_dir = veh_offset(r_veh_coord_1.x, r_veh_coord_1.y, r_veh_coord_2.x, r_veh_coord_2.y)
+            veh_list.append([r_veh_id, 'r', link_id, r_veh_coord_offset[0], r_veh_coord_offset[1], r_veh_dir[0], r_veh_dir[1]])
+
+    veh_df = pd.DataFrame(veh_list, columns=['veh_id', 'status', 'link_id', 'lon_offset_utm', 'lat_offset_utm', 'dir_x', 'dir_y'])
+    veh_df['lon_offset_sumo'] = veh_df['lon_offset_utm']-525331.68
+    veh_df['lat_offset_sumo'] = veh_df['lat_offset_utm']-4194202.74
+    # print(veh_df.iloc[0])
+    # print(veh_df['lon_offset_utm'].iloc[0], veh_df['lon_offset_utm'].iloc[0]-518570.38)
+    veh_df.to_csv(simulation_outputs+'/veh_loc_interpolated/veh_loc_t{}.csv'.format(t), index=False)
+    veh_gdf = gpd.GeoDataFrame(veh_df, crs='epsg:32610', geometry=gpd.points_from_xy(veh_df.lon_offset_utm, veh_df.lat_offset_utm))
     veh_gdf.loc[veh_gdf['veh_id']==game_veh_id, 'status'] = 'g'
 
     def hex_color(c, ty):
@@ -107,6 +131,8 @@ def snapshot(t, game_veh_id, current_link_id, link_detailed_dict, road_gdf):
     fig.text(0.5, 0.85, '{} sec into evacuation'.format(t), fontsize=30, ha='center', va='center')
     plt.savefig(visualization_outputs + '/veh_loc_plot/veh_loc_t{}.png'.format(t))#, transparent=True)
     plt.close()
+    sys.exit(0)
+
 
 def main():
     game_veh_id = 144
@@ -114,9 +140,9 @@ def main():
     road_df = pd.read_csv(network_file_edges_expanded)
     road_df['end_nid'] = road_df['end_nid'].astype(str)
     road_gdf = gpd.GeoDataFrame(road_df, crs='epsg:4326', geometry=road_df['geometry'].map(shapely.wkt.loads))
-    road_gdf = road_gdf.to_crs("EPSG:26910")
+    road_gdf = road_gdf.to_crs("EPSG:32610") ### 32610, 26910
 
-    for t in range(0, 600, 10):
+    for t in range(60, 600, 10):
         current_link_id = None
         link_detailed_dict = json.load(open(simulation_outputs+'/link_detailed_outputs/link_detail_{}_t{}.json'.format(scen_nm, t)))
         
@@ -133,7 +159,7 @@ def make_gif():
     import imageio
     images = []
     durations = []
-    for t in range(0,600,10):
+    for t in range(60,600,10):
 #         memory = make_img(t=t, memory=memory)
         images.append(imageio.imread(visualization_outputs + '/veh_loc_plot/veh_loc_t{}.png'.format(t)))
         if t%60 == 0:
@@ -143,5 +169,5 @@ def make_gif():
     imageio.mimsave(visualization_outputs + '/veh_loc_plot/veh_loc_animation_fast.gif', images, duration=durations)
 
 if __name__ == '__main__':
-    # main()
-    make_gif()
+    main()
+    # make_gif()
