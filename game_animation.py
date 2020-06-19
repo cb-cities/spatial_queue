@@ -30,8 +30,8 @@ def veh_offset(x1, y1, x2, y2):
     mid_x = (x1 + x2) / 2
     mid_y = (y1 + y2) / 2
 
-    delta_x = perp[0]/mode*3
-    delta_y = perp[1]/mode*3
+    delta_x = perp[0]/mode*1.75
+    delta_y = perp[1]/mode*1.75
 
     return (mid_x + delta_x, mid_y + delta_y), (tangent[0]/mode, tangent[1]/mode)
 
@@ -135,14 +135,14 @@ def snapshot(t, game_veh_id, current_link_id, link_detailed_dict, road_gdf):
 
 
 def main():
-    game_veh_id = 144
+    game_veh_id = 247
     scen_nm = 'game'
     road_df = pd.read_csv(network_file_edges_expanded)
     road_df['end_nid'] = road_df['end_nid'].astype(str)
     road_gdf = gpd.GeoDataFrame(road_df, crs='epsg:4326', geometry=road_df['geometry'].map(shapely.wkt.loads))
     road_gdf = road_gdf.to_crs("EPSG:32610") ### 32610, 26910
 
-    for t in range(60, 600, 10):
+    for t in range(10, 600, 10):
         current_link_id = None
         link_detailed_dict = json.load(open(simulation_outputs+'/link_detailed_outputs/link_detail_{}_t{}.json'.format(scen_nm, t)))
         
