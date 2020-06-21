@@ -1,5 +1,7 @@
 projects/
 removed/
+vscode_workspace.code-workspace
+joblist**
 **/*.out
 **/*.err
 **/*.csv

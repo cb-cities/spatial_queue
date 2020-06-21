@@ -287,7 +287,7 @@ class Agent:
 
 ### distance to fire starting point
 def fire_point_distance(veh_loc):
-    fire_lon, fire_lat = -122.2502, 37.9068
+    fire_lon, fire_lat = -122.249261, 37.910399
     [veh_lon, veh_lat] = zip(*veh_loc)
     veh_firestart_dist = haversine.haversine(np.array(veh_lat), np.array(veh_lon), fire_lat, fire_lon)
     return veh_firestart_dist
@@ -306,17 +306,25 @@ def fire_frontier_distance(fire_frontier, veh_loc, t):
         veh_fire_dist_after = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_after)
         veh_fire_dist = veh_fire_dist_before * (t_after-t)/(t_after-t_before) + veh_fire_dist_after * (t-t_before)/(t_after-t_before)
     return np.mean(veh_fire_dist), np.sum(veh_fire_dist<0)
+### numbers of vehicles that have left the evacuation zone / buffer distance
+def outside_polygon(evacuation_zone, evacuation_buffer, veh_loc):
+    [veh_lon, veh_lat] = zip(*veh_loc)
+    evacuation_zone_dist = haversine.point_to_vertex_dist(veh_lon, veh_lat, evacuation_zone)
+    evacuation_buffer_dist = haversine.point_to_vertex_dist(veh_lon, veh_lat, evacuation_buffer)
+    return np.sum(evacuation_zone_dist>0), np.sum(evacuation_buffer_dist>0)
 
 def network(network_file_edges=None, network_file_nodes=None, simulation_outputs=None, cf_files=[], scen_nm=''):
     logger = logging.getLogger("bk_evac")
 
     links_df0 = pd.read_csv(work_dir + network_file_edges)
-    ### tertiary and below
-    links_df0['lanes'] = np.where(links_df0['type'].isin(['residential', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified']), 1, links_df0['lanes'])
-    links_df0['maxmph'] = np.where(links_df0['type'].isin(['residential', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified']), 25, links_df0['maxmph'])
-    ### primary
-    links_df0['lanes'] = np.where(links_df0['type'].isin(['primary', 'primary_link']), 1, links_df0['lanes'])
+    ### lane assumptions
+    ### leave to OSM specified values for motorway and trunk
+    links_df0['lanes'] = np.where(links_df0['type'].isin(['primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link']), 2, links_df0['lanes'])
+    links_df0['lanes'] = np.where(links_df0['type'].isin(['residential', 'unclassified']), 1, links_df0['lanes'])
+    ### speed assumptions
     links_df0['maxmph'] = np.where(links_df0['type'].isin(['primary', 'primary_link']), 55, links_df0['maxmph'])
+    links_df0['maxmph'] = np.where(links_df0['type'].isin(['secondary', 'secondary_link', 'tertiary', 'tertiary_link']), 25, links_df0['maxmph'])
+    links_df0['maxmph'] = np.where(links_df0['type'].isin(['residential', 'unclassified']), 25*0.8, links_df0['maxmph'])
     if len(cf_files)>0:
         ### read counterflow links
         cf_links = []
@@ -333,7 +341,7 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
         links_df0['maxmph'] = np.where(links_df0['edge_id_igraph'].isin(opcf_links_id), 0.000001, links_df0['maxmph'])
 
     links_df0['fft'] = links_df0['length']/links_df0['maxmph']*2.237
-    links_df0['capacity'] = 2000*links_df0['lanes']
+    links_df0['capacity'] = 1900*links_df0['lanes']
     links_df0 = links_df0[['edge_id_igraph', 'start_igraph', 'end_igraph', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
 
     nodes_df0 = pd.read_csv(work_dir + network_file_nodes)
@@ -417,7 +425,7 @@ def route(scen_nm=''):
     logger = logging.getLogger("bk_evac")
     
     ### Build a pool
-    process_count = 40
+    process_count = 1
     pool = Pool(processes=process_count)
 
     ### Find shortest pathes
@@ -484,13 +492,18 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         node.calculate_straight_ahead_links()
     
     ### demand
+    evacuation_zone_df = pd.read_csv(open(work_dir+'/projects/berkeley/demand_inputs/manual_evacuation_zone_shattuck.csv'))
+    evacuation_zone_gdf = gpd.GeoDataFrame(evacuation_zone_df, crs='epsg:4326', geometry=evacuation_zone_df['WKT'].map(loads))
+    evacuation_zone = evacuation_zone_gdf['geometry'].iloc[0]
+    evacuation_buffer = evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).to_crs('epsg:4326').iloc[0]
+
     agents = demand(nodes_osmid_dict, dept_time=dept_time, demand_files = demand_files, tow_pct=tow_pct, phase_scale=phase_scale)
     agent_id_dict = {agent.id: agent for agent in agents}
 
     ### fire growth
     fire_frontier = pd.read_csv(open(work_dir + '/projects/berkeley/demand_inputs/fire_fitted_ellipse.csv'))
     fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
-    fire_frontier = gpd.GeoDataFrame(fire_frontier, crs={'init':'epsg:4326'}, geometry=fire_frontier['geometry'].map(loads))
+    fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads))
     
     t_s, t_e = 0, 12000
     move = 0
@@ -522,10 +535,11 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
                 break
             veh_loc = [link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint for agent in agent_id_dict.values() if agent.status != 'arr']
             avg_fire_dist, neg_dist = fire_frontier_distance(fire_frontier, veh_loc, t)
-            outside_danger_cnts = np.sum(fire_point_distance(veh_loc)>5000)
+            # outside_danger_cnts = np.sum(fire_point_distance(veh_loc)>5000)
+            outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = outside_polygon(evacuation_zone, evacuation_buffer, veh_loc)
             spruce_q = len(link_id_dict[28224].queue_veh)
             hearst_q = len(link_id_dict[19355].queue_veh)
-            t_stats.append([t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_danger_cnts, t_spruce_flow, t_hearst_flow, t_other_flow, spruce_q, hearst_q])
+            t_stats.append([t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, t_spruce_flow, t_hearst_flow, t_other_flow, spruce_q, hearst_q])
         ### stepped outputs
         if t%100==0:
             link_output = pd.DataFrame([(link.id, len(link.queue_veh), len(link.run_veh), round(link.travel_time, 2)) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'q', 'r', 't'])
@@ -533,7 +547,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         if t%100==0: 
             logging.info(" ".join([str(i) for i in t_stats[-1]]) + " " + str(len(veh_loc)))
     
-    pd.DataFrame(t_stats, columns=['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_cnts', 'spruce_flow', 'hearst_flow', 'other_flow', 'spruce_q', 'hearst_q']).to_csv(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), index=False)
+    pd.DataFrame(t_stats, columns=['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts', 'spruce_flow', 'hearst_flow', 'other_flow', 'spruce_q', 'hearst_q']).to_csv(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), index=False)
 
 
 
