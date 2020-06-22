@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[22]:
-
 import os
 import gc
 import sys
@@ -27,7 +25,6 @@ absolute_path = '/home/bingyu/spatial_queue'
 sys.path.insert(0, absolute_path+'/../')
 from sp import interface 
 import util.haversine as haversine
-
 
 class Node:
     def __init__(self, id, lon, lat, type, osmid=None):
