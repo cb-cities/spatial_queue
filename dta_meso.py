@@ -6,6 +6,7 @@ import gc
 import sys
 import time 
 import json
+import pyproj
 import random
 import logging 
 import numpy as np
@@ -14,6 +15,7 @@ from ctypes import *
 import scipy.io as sio
 import geopandas as gpd
 from shapely.wkt import loads
+from shapely.geometry import Point
 import scipy.sparse as ssparse
 from multiprocessing import Pool
 from scipy.stats import truncnorm
@@ -34,6 +36,7 @@ class Node:
         ### derived
         # self.id_sp = self.id + 1
         self.in_links = {} ### {in_link_id: straight_ahead_out_link_id, ...}
+        self.in_links_lt = {} ### {in_link_id: straight_ahead_out_link_id, ...}
         self.out_links = []
         self.go_vehs = [] ### veh that moves in this time step
         self.status = None
@@ -46,95 +49,142 @@ class Node:
     
     def calculate_straight_ahead_links(self):
         for il in self.in_links.keys():
-            x_start = node_id_dict[link_id_dict[il].start_nid].lon
-            y_start = node_id_dict[link_id_dict[il].start_nid].lat
+            (x_start, y_start) = link_id_dict[il].geometry.interpolate(0.9, normalized=True).coords[0]
             in_vec = (self.lon-x_start, self.lat-y_start)
-            sa_ol = None ### straight ahead out link
-            ol_dir = 180
             for ol in self.out_links:
-                x_end = node_id_dict[link_id_dict[ol].end_nid].lon
-                y_end = node_id_dict[link_id_dict[ol].end_nid].lat
+                (x_end, y_end) = link_id_dict[ol].geometry.interpolate(0.1, normalized=True).coords[0]
                 out_vec = (x_end-self.lon, y_end-self.lat)
                 dot = (in_vec[0]*out_vec[0] + in_vec[1]*out_vec[1])
                 det = (in_vec[0]*out_vec[1] - in_vec[1]*out_vec[0])
-                new_ol_dir = np.arctan2(det, dot)*180/np.pi
-                if abs(new_ol_dir)<ol_dir:
-                    sa_ol = ol
-                    ol_dir = new_ol_dir
-            if (abs(ol_dir)<=45) and link_id_dict[il].type=='real':
-                self.in_links[il] = sa_ol
+                ol_dir = np.arctan2(det, dot)*180/np.pi
+                if (abs(ol_dir)<=20) and link_id_dict[il].type=='real':
+                    self.in_links[il].append(ol)
+                if (ol_dir>70) and (ol_dir<110) and link_id_dict[il].type=='real':
+                    self.in_links_lt[il].append(ol)
 
     def find_go_vehs(self, go_link):
         go_vehs_list = []
         incoming_lanes = int(np.floor(go_link.lanes))
         incoming_vehs = len(go_link.queue_veh)
-        for ln in range(min(incoming_lanes, incoming_vehs)):
-            agent_id = go_link.queue_veh[ln]
-            agent_next_node, ol, agent_dir = agent_id_dict[agent_id].prepare_agent(self.id)   
-            go_vehs_list.append([agent_id, agent_next_node, go_link.id, ol, agent_dir])
+        go_vehs_list = [go_link.queue_veh[ln] for ln in range(min(incoming_lanes, incoming_vehs))]
         return go_vehs_list
 
-    def non_conflict_vehs(self, t_now):
+    def move_veh(self, agent_id, t_now, left_turn_allowed=True):
+        ### veh properties
+        veh_len = agent_id_dict[agent_id].veh_len
+        agent_destin_idsp = agent_id_dict[agent_id].destin_idsp
+        ### this link
+        agent_cls = agent_id_dict[agent_id].cls
+        il = node2link_dict[(agent_cls, self.id)]
+        ### arrival, current node is destination
+        if self.id+1 == agent_destin_idsp:
+            ### before move agent as it uses the old agent.cl_enter_time
+            link_id_dict[il].send_veh(t_now, agent_id)
+            agent_id_dict[agent_id].move_agent(t_now, self.id, None, 'arr')
+            # if agent_id == 1042: print(agent_id_dict[agent_id].cls)
+            return 1, False
+
+        ### next link
+        next_link_end = [end for (start, end) in agent_id_dict[agent_id].route_igraph if start == self.id][0]
+        ol = node2link_dict[(self.id, next_link_end)]
+        ### need reroute because of spillback or fire closure ahead
+        if (link_id_dict[ol].st_c < veh_len) or (link_id_dict[ol].closure_status=='closed'):
+            ### temporarily increase the weight of the undesired road
+            g.update_edge(self.id+1, next_link_end+1, c_double(10e7))
+            sp = g.dijkstra(self.id+1, agent_destin_idsp)
+            dist = sp.distance(agent_destin_idsp)
+            if dist >= 10e7: ### no alternative path, do not update existing path as the trap status may be lifted in the next time step
+                # agent_id_dict[agent_id].route_igraph = []
+                agent_id_dict[agent_id].find_route = 'trapped'
+            else:
+                sp_route = sp.route(agent_destin_idsp)
+                agent_id_dict[agent_id].route_igraph = [(agent_cls, self.id)] + [(start_sp-1, end_sp-1) for (start_sp, end_sp) in sp_route]
+                agent_id_dict[agent_id].find_route = 'detour'
+                ### if not trapped, i.e., "detour" or "normal" or "a", recalculate path related variables
+                next_link_end = [end for (start, end) in agent_id_dict[agent_id].route_igraph if start == self.id][0]
+                ol = node2link_dict[(self.id, next_link_end)]
+            sp.clear()
+            g.update_edge(self.id+1, next_link_end+1, c_double(link_id_dict[ol].travel_time))
+        else:
+            agent_id_dict[agent_id].find_route = 'normal'
+        
+        ### if vehicle is trapped, it does not move and also blocks other vehicles
+        if agent_id_dict[agent_id].find_route == 'trapped':
+            return 0, False
+
+        ### check if the movement is a left turn
+        left_turn = (ol in self.in_links_lt[il])
+        ### no storage capacity downstream, or closed downstream due to fire should already be dealt with
+        ### if no left turns are allowed and this vehicle needs a left turn, then it cannot move
+        if left_turn and left_turn_allowed==False:
+            return 0, left_turn
+        ### inlink-sending, outlink-receiving both permits
+        elif (link_id_dict[il].ou_c >= 1) & (link_id_dict[ol].in_c >= 1):
+            ### before move agent as it uses the old agent.cl_enter_time
+            link_id_dict[il].send_veh(t_now, agent_id)
+            agent_id_dict[agent_id].move_agent(t_now, self.id, next_link_end, 'flow')
+            link_id_dict[ol].receive_veh(agent_id)
+            # if agent_id == 1042: print(agent_id_dict[agent_id].cls)
+            return 1, left_turn
+        ### either inlink-sending or outlink-receiving or both exhaust
+        else:
+            control_cap = min(link_id_dict[il].ou_c, link_id_dict[ol].in_c)
+            toss_coin = random.choices([0,1], weights=[1-control_cap, control_cap], k=1)
+            if toss_coin[0]:
+                ### before move agent as it uses the old agent.cl_enter_time
+                link_id_dict[il].send_veh(t_now, agent_id)
+                agent_id_dict[agent_id].move_agent(t_now, self.id, next_link_end, 'chance')
+                link_id_dict[ol].receive_veh(agent_id)
+                # if agent_id == 1042: print(agent_id_dict[agent_id].cls)
+                return 1, left_turn
+            else:
+                if link_id_dict[il].ou_c < link_id_dict[ol].in_c:
+                    link_id_dict[il].ou_c = max(0, link_id_dict[il].ou_c-1)
+                elif link_id_dict[ol].in_c < link_id_dict[il].ou_c:
+                    link_id_dict[ol].in_c = max(0, link_id_dict[ol].in_c-1)
+                else:
+                    link_id_dict[il].ou_c -= 1
+                    link_id_dict[ol].in_c -= 1
+                return 0, left_turn
+
+    def run_node_model(self, t_now):
         logger = logging.getLogger("bk_evac")
-        self.go_vehs = []
-        ### a primary direction
+        node_move = 0
+        left_turn = False
+
+        ### randomly select an inflow link
         in_links = [l for l in self.in_links.keys() if len(link_id_dict[l].queue_veh)>0]
-        if len(in_links) == 0: return
+        if len(in_links) == 0: return 0
         go_link = link_id_dict[random.choice(in_links)]
+        ### non-blocking between different lanes of the same link
         go_vehs_list = self.find_go_vehs(go_link)
-        self.go_vehs += go_vehs_list
-        ### a non-conflicting direction
-        if (np.min([veh[-1] for veh in go_vehs_list])<-45) or (go_link.type=='v'): return ### no opposite veh allows to move if there is left turn veh in the primary direction; or if the primary incoming link is a virtual link
-        if self.in_links[go_link.id] == None: return ### no straight ahead opposite links
-        op_go_link = link_id_dict[self.in_links[go_link.id]]
+        # if self.id=='vn189': 
+        #     print(go_vehs_list)
+        for veh in go_vehs_list:
+            ### left turns are allowed for all vehicles from the primary direction
+            veh_move, veh_left_turn = self.move_veh(veh, t_now, left_turn_allowed=True)
+            node_move += veh_move
+            left_turn = left_turn or veh_left_turn
+        ### if primary direction has left turns, then no secondary direction allowed
+        if left_turn: return node_move
+        
+        ### get straight ahead direction as the secondary direction
+        try:
+            op_go_link = link_id_dict[random.choice(self.in_links[go_link.id])]
+        except IndexError:
+            return node_move
         try:
             op_go_link = link_id_dict[node2link_dict[(op_go_link.end_nid, op_go_link.start_nid)]]
-        except KeyError: ### straight ahead link is one-way
-            return
+        except KeyError:
+            return node_move
         op_go_vehs_list = self.find_go_vehs(op_go_link)
-        self.go_vehs += [veh for veh in op_go_vehs_list if veh[-1]>-45] ### only straight ahead or right turns allowed for vehicles from the opposite side
-
-    def run_node_model(self, t_now, transfer_s, transfer_e):
-        logger = logging.getLogger("bk_evac")
-        self.non_conflict_vehs(t_now=t_now)
-        node_move = 0
-        ### Agent reaching destination
-        for [agent_id, next_node, il, ol, agent_dir] in self.go_vehs:
-            veh_len = agent_id_dict[agent_id].veh_len
-            ### arrival
-            if (next_node is None) and (self.id == agent_id_dict[agent_id].destin_nid):
-                node_move += 1
-                ### before move agent as it uses the old agent.cl_enter_time
-                link_id_dict[il].send_veh(t_now, agent_id)
-                agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'arr', il, ol, transfer_s, transfer_e)
-            ### no storage capacity downstream
-            elif link_id_dict[ol].st_c < veh_len:
-                pass ### no blocking, as # veh = # lanes
-            ### inlink-sending, outlink-receiving both permits
-            elif (link_id_dict[il].ou_c >= 1) & (link_id_dict[ol].in_c >= 1):
-                node_move += 1
-                ### before move agent as it uses the old agent.cl_enter_time
-                link_id_dict[il].send_veh(t_now, agent_id)
-                agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'flow', il, ol, transfer_s, transfer_e)
-                link_id_dict[ol].receive_veh(agent_id)
-            ### either inlink-sending or outlink-receiving or both exhaust
+        for veh in op_go_vehs_list:
+            ### left turns not allowed for secondary direction if primary direction has vehicles moving
+            if veh_move == 0:
+                veh_move, veh_left_turn = self.move_veh(veh, t_now, left_turn_allowed=True)
             else:
-                control_cap = min(link_id_dict[il].ou_c, link_id_dict[ol].in_c)
-                toss_coin = random.choices([0,1], weights=[1-control_cap, control_cap], k=1)
-                if toss_coin[0]:
-                    node_move += 1
-                    ### before move agent as it uses the old agent.cl_enter_time
-                    link_id_dict[il].send_veh(t_now, agent_id)
-                    agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'chance', il, ol, transfer_s, transfer_e)
-                    link_id_dict[ol].receive_veh(agent_id)
-                else:
-                    if link_id_dict[il].ou_c < link_id_dict[ol].in_c:
-                       link_id_dict[il].ou_c = max(0, link_id_dict[il].ou_c-1)
-                    elif link_id_dict[ol].in_c < link_id_dict[il].ou_c:
-                        link_id_dict[ol].in_c = max(0, link_id_dict[ol].in_c-1)
-                    else:
-                        link_id_dict[il].ou_c -= 1
-                        link_id_dict[ol].in_c -= 1
+                veh_move, veh_left_turn = self.move_veh(veh, t_now, left_turn_allowed=False)
+            node_move += veh_move
         return node_move
 
 class Link:
@@ -155,13 +205,38 @@ class Link:
         self.ou_c = self.capacity/3600.0
         self.st_c = self.store_cap # remaining storage capacity
         self.midpoint = list(self.geometry.interpolate(0.5, normalized=True).coords)[0]
+        [self.start_lon_proj, self.end_lon_proj], [self.start_lat_proj, self.end_lat_proj] = pyproj.transform(
+            pyproj.Proj('epsg:4326'), pyproj.Proj('epsg:26910'), 
+            [self.geometry.coords[0][1], self.geometry.coords[-1][1]], [self.geometry.coords[0][0], self.geometry.coords[-1][0]])
         ### empty
         self.queue_veh = [] # [(agent, t_enter), (agent, t_enter), ...]
         self.run_veh = []
         self.travel_time_list = [] ### [(t_enter, dur), ...] travel time of each agent left the link in a given period; reset at times
         self.travel_time = fft
-        self.start_node = None
-        self.end_node = None
+        self.queue_start = False
+        self.queue_start_t = None
+        self.queue_end_t = None
+        self.closure_status = 'open'
+
+    def get_closure_status(self, t_now, flame_length_hour):
+        if flame_length_hour.shape[0]==0:
+            return
+        l13 = np.vstack((flame_length_hour['lon'] - self.start_lon_proj, flame_length_hour['lat'] - self.start_lat_proj)).T
+        l23 = np.vstack((flame_length_hour['lon'] - self.end_lon_proj, flame_length_hour['lat'] - self.end_lat_proj)).T
+        l12 = (self.end_lon_proj - self.start_lon_proj, self.end_lat_proj - self.start_lat_proj)
+        l21 = (self.start_lon_proj - self.end_lon_proj, self.start_lat_proj - self.end_lat_proj)
+        ### line distance
+        line_dist = np.abs(np.matmul(l13, (l12[-1], -l12[0]))) / np.linalg.norm(l12)
+        ### start_dist_array
+        start_node_distance = np.linalg.norm(l13, axis=1)
+        start_node_angle = np.matmul(l13, l12)
+        ### end_dist_array
+        end_node_distance = np.linalg.norm(l23, axis=1)
+        end_node_angle = np.matmul(l23, l21)
+        point_line_dist = np.where(start_node_angle<0, start_node_distance,
+                                    np.where(end_node_angle<0, end_node_distance, line_dist))
+        if np.min(point_line_dist) < 30: ### within 30 m of the fire flame
+            self.closure_status = 'closed'
 
     def send_veh(self, t_now, agent_id):
         ### remove the agent from queue
@@ -181,6 +256,12 @@ class Link:
         ### remaining spaces on link for the node model to move vehicles to this link
         self.st_c = self.store_cap - np.sum([agent_id_dict[agent_id].veh_len for agent_id in self.run_veh+self.queue_veh])
         self.in_c, self.ou_c = self.capacity/3600, self.capacity/3600
+        ### find queue duration
+        if len(self.queue_veh)>0:
+            self.queue_end_t = t_now
+            if not self.queue_start:
+                self.queue_start_t = t_now
+                self.queue_start = True
     
     def update_travel_time(self, t_now, link_time_lookback_freq):
         self.travel_time_list = [(t_rec, dur) for (t_rec, dur) in self.travel_time_list if (t_now-t_rec < link_time_lookback_freq)]
@@ -204,7 +285,7 @@ class Agent:
         ### Empty
         self.route_igraph = []
         self.find_route = None
-        self.status = None
+        self.status = 'predepart'
         self.cl_enter_time = None
 
     def load_trips(self, t_now):
@@ -213,29 +294,12 @@ class Agent:
             link_id_dict[initial_edge].run_veh.append(self.id)
             self.status = 'loaded'
             self.cl_enter_time = t_now
-
-    def prepare_agent(self, node_id):
-        assert self.cle == node_id, "agent next node {} is not the transferring node {}, route {}".format(self.cle, node_id, self.route_igraph)
-        if self.destin_nid == node_id: ### current node is agent destination
-            return None, None, 0 ### id, next_node, dir
-        agent_next_node = [end for (start, end) in self.route_igraph if start == node_id][0]
-        ol = node2link_dict[(node_id, agent_next_node)]
-        x_start, y_start = node_id_dict[self.cls].lon, node_id_dict[self.cls].lat
-        x_mid, y_mid = node_id_dict[node_id].lon, node_id_dict[node_id].lat
-        x_end, y_end = node_id_dict[agent_next_node].lon, node_id_dict[agent_next_node].lat
-        in_vec, out_vec = (x_mid-x_start, y_mid-y_start), (x_end-x_mid, y_end-y_mid)
-        dot, det = (in_vec[0]*out_vec[0] + in_vec[1]*out_vec[1]), (in_vec[0]*out_vec[1] - in_vec[1]*out_vec[0])
-        agent_dir = np.arctan2(det, dot)*180/np.pi 
-        return agent_next_node, ol, agent_dir
     
-    def move_agent(self, t_now, new_cls, new_cle, new_status, il, ol, transfer_s, transfer_e):
+    def move_agent(self, t_now, new_cls, new_cle, new_status):
         self.cls = new_cls
         self.cle = new_cle
         self.status = new_status
         self.cl_enter_time = t_now
-        ### pass key location
-        if (il==transfer_s) and (ol==transfer_e): return 1
-        else: return 0
 
     def get_path(self):
         sp = g.dijkstra(self.cle+1, self.destin_idsp)
@@ -252,7 +316,7 @@ class Agent:
             sp.clear()
 
 ### distance to fire starting point
-def fire_point_distance(veh_loc, fire_scen_id):
+def fire_point_distance(veh_loc, fire_scen_id=1):
     if fire_scen_id == 1:
         fire_lon, fire_lat = -122.71454, 37.90623
     elif fire_scen_id == 2:
@@ -278,7 +342,8 @@ def fire_frontier_distance(fire_frontier, veh_loc, t):
         veh_fire_dist_before = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_before)
         veh_fire_dist_after = haversine.point_to_vertex_dist(veh_lon, veh_lat, fire_frontier_after)
         veh_fire_dist = veh_fire_dist_before * (t_after-t)/(t_after-t_before) + veh_fire_dist_after * (t-t_before)/(t_after-t_before)
-    return np.mean(veh_fire_dist), np.sum(veh_fire_dist<0)
+    return veh_fire_dist
+
 ### numbers of vehicles that have left the evacuation zone / buffer distance
 def outside_polygon(evacuation_zone, evacuation_buffer, veh_loc):
     [veh_lon, veh_lat] = zip(*veh_loc)
@@ -346,7 +411,6 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
 
     return g, nodes, links
 
-
 def demand(nodes_osmid_dict, precalculated=False, dept_time=None, demand_files=None, tow_pct=0, phase_scale=None):
     logger = logging.getLogger("bk_evac")
 
@@ -359,7 +423,7 @@ def demand(nodes_osmid_dict, precalculated=False, dept_time=None, demand_files=N
         ### assign agent id
         if 'agent_id' not in od.columns: od['agent_id'] = np.arange(od.shape[0])
         ### assign departure time. dept_time_std == 0 --> everyone leaves at the same time
-        if precalculated:
+        if precalculated=='precalculated':
             pass
         else:
             [dept_time_mean, dept_time_std, dept_time_min, dept_time_max] = dept_time
@@ -423,7 +487,6 @@ def route(scen_nm=''):
     if cannot_arrive>0: logging.info('{} out of {} cannot arrive'.format(cannot_arrive, len(agent_id_dict)))
     return t_odsp_1-t_odsp_0, len(map_agent)
 
-
 def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh=None, reroute_flag=None, phase_scale=None, counterflow=None, transfer_s=None, transfer_e=None, firescen=None, commscen=None, popscen=None):
     ### logging and global variables
     random.seed(random_seed)
@@ -436,7 +499,9 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh
     link_time_lookback_freq = 20 ### sec
     network_file_edges = '/projects/bolinas_stinson_beach/network_inputs/osm_edges.csv'
     network_file_nodes = '/projects/bolinas_stinson_beach/network_inputs/osm_nodes.csv'
-    demand_files = ["/projects/bolinas_stinson_beach/demand_inputs/od_commscen{}_pop{}.csv".format(commscen, popscen)]
+    vphh = 2
+    visitor = 300
+    demand_files = ["/projects/bolinas_stinson_beach/demand_inputs/od/resident_visitor_od_rs{}_commscen{}_vphh{}_visitor{}.csv".format(random_seed, commscen, vphh, visitor)]
     simulation_outputs = '/projects/bolinas_stinson_beach/simulation_outputs'
     if counterflow=='ms':
         cf_files = ['/projects/berkeley/network_inputs/marin.csv', '/projects/berkeley/network_inputs/spruce.csv']
@@ -454,13 +519,18 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh
     g, nodes, links = network(
         network_file_edges = network_file_edges, network_file_nodes = network_file_nodes,
         simulation_outputs = simulation_outputs, cf_files = cf_files, scen_nm = scen_nm)
+    # sp = g.dijkstra(37+1, 155+1)
+    # sp_dist = sp.distance(155+1)
+    # print(sp_dist)
+    # sys.exit(0)
     nodes_osmid_dict = {node.osmid: node.id for node in nodes if node.type=='real'}
     node2link_dict = {(link.start_nid, link.end_nid): link.id for link in links}
     link_id_dict = {link.id: link for link in links}
     node_id_dict = {node.id: node for node in nodes}
     for link_id, link in link_id_dict.items():
         node_id_dict[link.start_nid].out_links.append(link_id)
-        node_id_dict[link.end_nid].in_links[link_id] = None
+        node_id_dict[link.end_nid].in_links[link_id] = []
+        node_id_dict[link.end_nid].in_links_lt[link_id] = []
     for node_id, node in node_id_dict.items():
         node.calculate_straight_ahead_links()
     
@@ -474,14 +544,23 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh
     agent_id_dict = {agent.id: agent for agent in agents}
 
     ### fire growth
-    fire_frontier = pd.read_csv(open(absolute_path + '/projects/bolinas_stinson_beach/demand_inputs/point{}_10Hr_simplified.csv'.format(firescen)))
+    fire_frontier = pd.read_csv(open(absolute_path + '/projects/bolinas_stinson_beach/demand_inputs/fire/point{}_10Hr_simplified.csv'.format(firescen)))
     fire_frontier['t'] = (fire_frontier['Hour']/100-9)*3600 ### suppose fire starts at 9am
     fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads))
+    ### flame length
+    flame_length = pd.read_csv(open(absolute_path + '/projects/bolinas_stinson_beach/demand_inputs/flame_length/point_firescen{}.csv'.format(firescen)))
+    flame_length = gpd.GeoDataFrame(flame_length, crs='epsg:4326', geometry=[Point(xy) for xy in zip(flame_length.lon, flame_length.lat)]).to_crs('epsg:26910')
+    flame_length['lon'], flame_length['lat'] = flame_length['geometry'].x, flame_length['geometry'].y
     
-    t_s, t_e = 0, 2000
-    move = 0
+    t_s, t_e = 0, 40000
+    sight = 0
     t_stats = []
     for t in range(t_s, t_e):
+        move = 0
+        ### flame length
+        if (t>0) and (t%3600 == 0):
+            flame_length_hour = flame_length.loc[(flame_length['t_hour']==t/3600) & (flame_length['flame_length']>6)]
+            print(t, flame_length_hour.shape)
         ### routing
         if (t==0) or (reroute_flag) and (t%reroute_freq == 0):
             ### update link travel time
@@ -489,34 +568,60 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh
             ### route
             route(scen_nm=scen_nm)
         ### load agents
+        # first bring forward departure time if sees fire
+        undeparted_veh_id, undeparted_veh_loc = [], []
+        for agent in agent_id_dict.values():
+            if agent.status=='predepart':
+                undeparted_veh_id.append(agent.id)
+                undeparted_veh_loc.append((node_id_dict[agent.origin_nid].lon, node_id_dict[agent.origin_nid].lat))
+        if len(undeparted_veh_id)==0: pass
+        else:
+            origin_fire_dist = fire_frontier_distance(fire_frontier, undeparted_veh_loc, t)
+            see_fire_veh_id = np.array(undeparted_veh_id)[origin_fire_dist<400]
+            sight += len(see_fire_veh_id)
+            for a in see_fire_veh_id: agent_id_dict[a].dept_time = t
+        # now load agents
         for agent_id, agent in agent_id_dict.items(): agent.load_trips(t)
         ### link model
-        for link_id, link in link_id_dict.items(): link.run_link_model(t)
+        for link_id, link in link_id_dict.items(): 
+            # first updates closure status
+            if (t>0) and (t%3600 == 0) and (link.type=='real'): link.get_closure_status(t, flame_length_hour)
+            # then run link model
+            link.run_link_model(t)
         ### node model
         for node_id, node in node_id_dict.items(): 
-            n_t_move = node.run_node_model(t, transfer_s, transfer_e)
+            n_t_move = node.run_node_model(t)
             move += n_t_move
         ### metrics
         if t%1 == 0:
             arrival_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='arr'])
             if arrival_cnts == len(agent_id_dict):
-                logging.info("all agents arrive at destinations")
+                logging.info("all agents arrive at destinations, {}".format(t))
+                print(commscen, ' ', reroute_flag, ' ', "all agents arrive at destinations, {}".format(t))
                 break
             veh_loc = [link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint for agent in agent_id_dict.values() if agent.status != 'arr']
-            avg_fire_dist, neg_dist = fire_frontier_distance(fire_frontier, veh_loc, t)
+            veh_fire_dist = fire_frontier_distance(fire_frontier, veh_loc, t)
+            avg_fire_dist, neg_dist = np.mean(veh_fire_dist), np.sum(veh_fire_dist<0)
             # outside_danger_cnts = np.sum(fire_point_distance(veh_loc)>5000)
             # outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = outside_polygon(evacuation_zone, evacuation_buffer, veh_loc)
             t_stats.append([t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist])
         ### stepped outputs
-        if t%100==0:
+        if t%1200==0:
             link_output = pd.DataFrame([(link.id, len(link.queue_veh), len(link.run_veh), round(link.travel_time, 2)) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'q', 'r', 't'])
             link_output[(link_output['q']>0) | (link_output['r']>0)].reset_index(drop=True).to_csv(absolute_path + simulation_outputs + '/link_stats/link_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
         if t%100==0: 
-            logging.info(" ".join([str(i) for i in t_stats[-1]]) + " " + str(len(veh_loc)))
+            predepart_cnts = np.sum([agent.status=='predepart' for agent in agent_id_dict.values()])
+            closed_roads = np.sum([link.closure_status=='closed' for link in link_id_dict.values()])
+            logging.info(" ".join([str(i) for i in t_stats[-1]]) + " " + str(len(veh_loc)) + " " + str(sight) + " " + str(predepart_cnts) + " " + str(closed_roads))
     
     pd.DataFrame(t_stats, columns=['t', 'arr', 'move', 'avg_fdist', 'neg_fdist']).to_csv(absolute_path + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), index=False)
+    ### link queue duration
+    pd.DataFrame([(link.id, link.queue_start_t, link.queue_end_t) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'queue_start_t', 'queue_end_t']).to_csv(absolute_path + simulation_outputs + '/link_stats/link_queue_duration_{}.csv'.format(scen_nm), index=False)
 
 if __name__ == '__main__':
-    main(random_seed=0, dept_time_id='precalculated', firescen=1, commscen=2, popscen=1500)
+    # for commscen in [0, 1, 2]:
+    #     for reroute_flag in [False, True]:
+    #         main(random_seed=0, reroute_flag=reroute_flag, dept_time_id='precalculated', firescen=1, commscen=commscen, popscen=1500)
+    main(random_seed=0, dept_time_id='precalculated', firescen=2, commscen=1, popscen=1500)
 
 
