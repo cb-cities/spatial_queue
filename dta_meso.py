@@ -89,34 +89,53 @@ class Node:
         ol = node2link_dict[(self.id, next_link_end)]
         ### need reroute because of spillback or fire closure ahead
         if (link_id_dict[ol].st_c < veh_len) or (link_id_dict[ol].closure_status=='closed'):
-            ### temporarily increase the weight of the undesired road
-            g.update_edge(self.id+1, next_link_end+1, c_double(10e7))
-            sp = g.dijkstra(self.id+1, agent_destin_idsp)
-            dist = sp.distance(agent_destin_idsp)
-            if dist >= 10e7: ### no alternative path, do not update existing path as the trap status may be lifted in the next time step
-                # agent_id_dict[agent_id].route_igraph = []
-                agent_id_dict[agent_id].find_route = 'trapped'
-            else:
-                sp_route = sp.route(agent_destin_idsp)
-                agent_id_dict[agent_id].route_igraph = [(agent_cls, self.id)] + [(start_sp-1, end_sp-1) for (start_sp, end_sp) in sp_route]
-                agent_id_dict[agent_id].find_route = 'detour'
-                ### if not trapped, i.e., "detour" or "normal" or "a", recalculate path related variables
-                next_link_end = [end for (start, end) in agent_id_dict[agent_id].route_igraph if start == self.id][0]
-                ol = node2link_dict[(self.id, next_link_end)]
-            sp.clear()
-            g.update_edge(self.id+1, next_link_end+1, c_double(link_id_dict[ol].travel_time))
+            agent_id_dict[agent_id].find_route = 'trapped'
+            if link_id_dict[ol].st_c < veh_len: agent_id_dict[agent_id].find_route+='_t'
+            if link_id_dict[ol].closure_status=='closed': agent_id_dict[agent_id].find_route+='_f'
+            # ### temporarily increase the weight of the undesired road
+            # temp_close = []
+            # if link_id_dict[il].type =='real':
+            #     temp_close.append([agent_cls, self.id, link_id_dict[il].travel_time])
+            # for one_ol in self.out_links:
+            #     if (link_id_dict[one_ol].st_c < veh_len) or (link_id_dict[one_ol].closure_status=='closed'):
+            #         temp_close.append([self.id, link_id_dict[one_ol].end_nid, link_id_dict[one_ol].travel_time])
+            #     elif link_id_dict[one_ol].end_nid == agent_cls:
+            #         temp_close.append([self.id, link_id_dict[one_ol].end_nid, link_id_dict[one_ol].travel_time])
+            #     else:
+            #         pass
+            # for [temp_close_s, temp_close_e, temp_close_t] in temp_close:
+            #     g.update_edge(temp_close_s+1, temp_close_e+1, c_double(10e7))
+            # sp = g.dijkstra(self.id+1, agent_destin_idsp)
+            # dist = sp.distance(agent_destin_idsp)
+            # if dist >= 10e7: ### no alternative path, do not update existing path as the trap status may be lifted in the next time step
+            #     # agent_id_dict[agent_id].route_igraph = []
+            #     agent_id_dict[agent_id].find_route = 'trapped'
+            #     if link_id_dict[ol].st_c < veh_len: agent_id_dict[agent_id].find_route+'_t'
+            #     if link_id_dict[ol].closure_status=='closed': agent_id_dict[agent_id].find_route+'_f'
+            # else:
+            #     sp_route = sp.route(agent_destin_idsp)
+            #     agent_id_dict[agent_id].route_igraph = [(agent_cls, self.id)] + [(start_sp-1, end_sp-1) for (start_sp, end_sp) in sp_route]
+            #     agent_id_dict[agent_id].find_route = 'detour'
+            #     ### if not trapped, i.e., "detour" or "normal" or "a", recalculate path related variables
+            #     next_link_end = [end for (start, end) in agent_id_dict[agent_id].route_igraph if start == self.id][0]
+            #     ol = node2link_dict[(self.id, next_link_end)]
+            # sp.clear()
+            # for [temp_close_s, temp_close_e, temp_close_t] in temp_close:
+            #     g.update_edge(temp_close_s+1, temp_close_e+1, c_double(temp_close_t))
         else:
             agent_id_dict[agent_id].find_route = 'normal'
         
         ### if vehicle is trapped, it does not move and also blocks other vehicles
-        if agent_id_dict[agent_id].find_route == 'trapped':
+        if agent_id_dict[agent_id].find_route[0:7] == 'trapped':
+            agent_id_dict[agent_id].status = 'stay'
             return 0, False
 
         ### check if the movement is a left turn
         left_turn = (ol in self.in_links_lt[il])
-        ### no storage capacity downstream, or closed downstream due to fire should already be dealt with
+        ### no storage capacity downstream, or closed downstream due to fire should already be dealt with in the "trapped" scenario
         ### if no left turns are allowed and this vehicle needs a left turn, then it cannot move
         if left_turn and left_turn_allowed==False:
+            agent_id_dict[agent_id].status = 'stay'
             return 0, left_turn
         ### inlink-sending, outlink-receiving both permits
         elif (link_id_dict[il].ou_c >= 1) & (link_id_dict[ol].in_c >= 1):
@@ -138,6 +157,7 @@ class Node:
                 # if agent_id == 1042: print(agent_id_dict[agent_id].cls)
                 return 1, left_turn
             else:
+                agent_id_dict[agent_id].status = 'stay'
                 if link_id_dict[il].ou_c < link_id_dict[ol].in_c:
                     link_id_dict[il].ou_c = max(0, link_id_dict[il].ou_c-1)
                 elif link_id_dict[ol].in_c < link_id_dict[il].ou_c:
@@ -235,7 +255,7 @@ class Link:
         end_node_angle = np.matmul(l23, l21)
         point_line_dist = np.where(start_node_angle<0, start_node_distance,
                                     np.where(end_node_angle<0, end_node_distance, line_dist))
-        if np.min(point_line_dist) < 30: ### within 30 m of the fire flame
+        if np.min(point_line_dist) < 20: ### within 20=(1.414*30/2) m of the cell centroid. Cell width ~= 30m
             self.closure_status = 'closed'
 
     def send_veh(self, t_now, agent_id):
@@ -257,7 +277,7 @@ class Link:
         self.st_c = self.store_cap - np.sum([agent_id_dict[agent_id].veh_len for agent_id in self.run_veh+self.queue_veh])
         self.in_c, self.ou_c = self.capacity/3600, self.capacity/3600
         ### find queue duration
-        if len(self.queue_veh)>0:
+        if len(self.queue_veh)>self.lanes:
             self.queue_end_t = t_now
             if not self.queue_start:
                 self.queue_start_t = t_now
@@ -270,13 +290,14 @@ class Link:
             g.update_edge(self.start_nid+1, self.end_nid+1, c_double(self.travel_time))
 
 class Agent:
-    def __init__(self, id, origin_nid, destin_nid, dept_time, veh_len):
+    def __init__(self, id, origin_nid, destin_nid, dept_time, veh_len, a_type):
         #input
         self.id = id
         self.origin_nid = origin_nid
         self.destin_nid = destin_nid
         self.dept_time = dept_time
         self.veh_len = veh_len
+        self.type = a_type ### local or visitor
         ### derived
         self.cls = 'vn{}'.format(self.origin_nid) # current link start node
         self.cle = self.origin_nid # current link end node
@@ -447,6 +468,7 @@ def demand(nodes_osmid_dict, precalculated=False, dept_time=None, demand_files=N
         all_od_list.append(od)
 
     all_od = pd.concat(all_od_list, sort=False, ignore_index=True)
+    # all_od = all_od[all_od['type']=='local'].drop_duplicates(subset='parcel')
     all_od = all_od.sample(frac=1).reset_index(drop=True) ### randomly shuffle rows
     logging.info('total numbers of agents from file {}'.format(all_od.shape))
     # all_od = all_od.iloc[0:3000].copy()
@@ -454,7 +476,7 @@ def demand(nodes_osmid_dict, precalculated=False, dept_time=None, demand_files=N
 
     agents = []
     for row in all_od.itertuples():
-        agents.append(Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len')))    
+        agents.append(Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len'), getattr(row, 'type')))    
     return agents
 
 def map_sp(agent_id):
@@ -487,7 +509,7 @@ def route(scen_nm=''):
     if cannot_arrive>0: logging.info('{} out of {} cannot arrive'.format(cannot_arrive, len(agent_id_dict)))
     return t_odsp_1-t_odsp_0, len(map_agent)
 
-def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh=None, reroute_flag=None, phase_scale=None, counterflow=None, transfer_s=None, transfer_e=None, firescen=None, commscen=None, popscen=None):
+def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh=None, reroute_flag=None, phase_scale=None, counterflow=None, transfer_s=None, transfer_e=None, firescen=None, commscen=None, popscen=None, scen=''):
     ### logging and global variables
     random.seed(random_seed)
     np.random.seed(random_seed)
@@ -510,7 +532,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh
     else:
         cf_files = []
 
-    scen_nm = 'rs{}_f{}_c{}_p{}'.format(random_seed, firescen, commscen, popscen)
+    scen_nm = 'rs{}_f{}_c{}_vphh{}_vist{}{}'.format(random_seed, firescen, commscen, vphh, visitor, scen)
     logger = logging.getLogger("bk_evac")
     logging.basicConfig(filename=absolute_path+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
     logging.info(scen_nm)
@@ -552,14 +574,17 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh
     flame_length = gpd.GeoDataFrame(flame_length, crs='epsg:4326', geometry=[Point(xy) for xy in zip(flame_length.lon, flame_length.lat)]).to_crs('epsg:26910')
     flame_length['lon'], flame_length['lat'] = flame_length['geometry'].x, flame_length['geometry'].y
     
-    t_s, t_e = 0, 40000
+    t_s, t_e = 0, 36001
     sight = 0
-    t_stats = []
+    ### time step output
+    with open(absolute_path + simulation_outputs+'/t_stats/t_stats_scen{}.csv'.format(scen_nm),'w') as t_stats_outfile:
+        t_stats_outfile.write(",".join(['t', 'predepart', 'loaded', 'flow', 'chance', 'stay', 'arr', 'arr_local', 'arr_visitor', 'a', 'n_a', 'normal', 'detour', 'trapped_t', 'trapped_f', 'trapped_t_f', 'trapped_local', 'trapped_visitor', 'see_fire', 'move', 'avg_fdist', 'neg_fdist', 'closed_roads'])+"\n")
+
     for t in range(t_s, t_e):
         move = 0
         ### flame length
         if (t>0) and (t%3600 == 0):
-            flame_length_hour = flame_length.loc[(flame_length['t_hour']==t/3600) & (flame_length['flame_length']>6)]
+            flame_length_hour = flame_length.loc[(flame_length['t_hour']==t/3600) & (flame_length['flame_length']>2)]
             print(t, flame_length_hour.shape)
         ### routing
         if (t==0) or (reroute_flag) and (t%reroute_freq == 0):
@@ -577,7 +602,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh
         if len(undeparted_veh_id)==0: pass
         else:
             origin_fire_dist = fire_frontier_distance(fire_frontier, undeparted_veh_loc, t)
-            see_fire_veh_id = np.array(undeparted_veh_id)[origin_fire_dist<400]
+            see_fire_veh_id = np.array(undeparted_veh_id)[origin_fire_dist<400] ### sight distance
             sight += len(see_fire_veh_id)
             for a in see_fire_veh_id: agent_id_dict[a].dept_time = t
         # now load agents
@@ -594,34 +619,62 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=0, hh_veh
             move += n_t_move
         ### metrics
         if t%1 == 0:
+            ### agent status
+            predepart_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='predepart'])
+            loaded_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='loaded'])
+            flow_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='flow'])
+            chance_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='chance'])
+            stay_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='stay'])
             arrival_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='arr'])
+            arrival_cnts_local = np.sum([1 for a in agent_id_dict.values() if (a.status=='arr') and (a.type=='local')])
+            arrival_cnts_visitor = np.sum([1 for a in agent_id_dict.values() if (a.status=='arr') and (a.type=='visitor')])
             if arrival_cnts == len(agent_id_dict):
                 logging.info("all agents arrive at destinations, {}".format(t))
                 print(commscen, ' ', reroute_flag, ' ', "all agents arrive at destinations, {}".format(t))
                 break
+            ### find route status
+            a_cnts = np.sum([1 for a in agent_id_dict.values() if a.find_route=='a'])
+            n_a_cnts = np.sum([1 for a in agent_id_dict.values() if a.find_route=='n_a'])
+            normal_cnts = np.sum([1 for a in agent_id_dict.values() if a.find_route=='normal'])
+            detour_cnts = np.sum([1 for a in agent_id_dict.values() if a.find_route=='detour'])
+            trapped_t_cnts = np.sum([1 for a in agent_id_dict.values() if a.find_route=='trapped_t'])
+            trapped_f_cnts = np.sum([1 for a in agent_id_dict.values() if a.find_route=='trapped_f'])
+            trapped_t_f_cnts = np.sum([1 for a in agent_id_dict.values() if a.find_route=='trapped_t_f'])
+            trapped_local = np.sum([1 for a in agent_id_dict.values() if (a.find_route[0:7]=='trapped')  and (a.type=='local')])
+            trapped_visitor = np.sum([1 for a in agent_id_dict.values() if (a.find_route[0:7]=='trapped')  and (a.type=='visitor')])
+            ### danger level
             veh_loc = [link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint for agent in agent_id_dict.values() if agent.status != 'arr']
             veh_fire_dist = fire_frontier_distance(fire_frontier, veh_loc, t)
             avg_fire_dist, neg_dist = np.mean(veh_fire_dist), np.sum(veh_fire_dist<0)
+            ### road closure
+            closed_roads = np.sum([link.closure_status=='closed' for link in link_id_dict.values()])
             # outside_danger_cnts = np.sum(fire_point_distance(veh_loc)>5000)
             # outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = outside_polygon(evacuation_zone, evacuation_buffer, veh_loc)
-            t_stats.append([t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist])
+            with open(absolute_path + simulation_outputs+'/t_stats/t_stats_scen{}.csv'.format(scen_nm),'a') as t_stats_outfile:
+                t_stats_outfile.write(",".join([str(x) for x in [t, predepart_cnts, loaded_cnts, flow_cnts, chance_cnts, stay_cnts, arrival_cnts, arrival_cnts_local, arrival_cnts_visitor, a_cnts, n_a_cnts, normal_cnts, detour_cnts, trapped_t_cnts, trapped_f_cnts, trapped_t_f_cnts, trapped_local, trapped_visitor, sight, move, round(avg_fire_dist,2), neg_dist, closed_roads]]) + "\n")
+
         ### stepped outputs
         if t%1200==0:
             link_output = pd.DataFrame([(link.id, len(link.queue_veh), len(link.run_veh), round(link.travel_time, 2)) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'q', 'r', 't'])
             link_output[(link_output['q']>0) | (link_output['r']>0)].reset_index(drop=True).to_csv(absolute_path + simulation_outputs + '/link_stats/link_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
+        # if (t<12700) and (t>12000):
+        #     link_detailed_output = {link.id: {'queue': [(agent_id, agent_id_dict[agent_id].cl_enter_time) for agent_id in link.queue_veh], 'run': [(agent_id, agent_id_dict[agent_id].cl_enter_time) for agent_id in link.run_veh]} for link in link_id_dict.values()}
+        #     with open(absolute_path+simulation_outputs+'/link_detailed_outputs/link_detail_{}_t{}.json'.format(scen_nm, t), 'w') as outfile:
+        #         json.dump(link_detailed_output, outfile, indent=2)
         if t%100==0: 
-            predepart_cnts = np.sum([agent.status=='predepart' for agent in agent_id_dict.values()])
-            closed_roads = np.sum([link.closure_status=='closed' for link in link_id_dict.values()])
-            logging.info(" ".join([str(i) for i in t_stats[-1]]) + " " + str(len(veh_loc)) + " " + str(sight) + " " + str(predepart_cnts) + " " + str(closed_roads))
+            logging.info(",".join([str(x) for x in [t, ' || ', predepart_cnts, loaded_cnts, flow_cnts, chance_cnts, stay_cnts, arrival_cnts, arrival_cnts_local, arrival_cnts_visitor, ' || ', a_cnts, n_a_cnts, normal_cnts, detour_cnts, trapped_t_cnts, trapped_f_cnts, trapped_t_f_cnts, trapped_local, trapped_visitor, ' || ', sight, move, round(avg_fire_dist,2), neg_dist, closed_roads]]))
+        if (t>0) and (t%3600 == 0): 
+            logging.info("closed roads " + ", ".join([str(link.id) for link in link_id_dict.values() if link.closure_status=='closed']))
+            print(scen_nm + ",".join([str(x) for x in [t, ' || ', predepart_cnts, loaded_cnts, flow_cnts, chance_cnts, stay_cnts, arrival_cnts, arrival_cnts_local, arrival_cnts_visitor, ' || ', a_cnts, n_a_cnts, normal_cnts, detour_cnts, trapped_t_cnts, trapped_f_cnts, trapped_t_f_cnts, trapped_local, trapped_visitor, ' || ', sight, move, round(avg_fire_dist,2), neg_dist, closed_roads]]))
     
-    pd.DataFrame(t_stats, columns=['t', 'arr', 'move', 'avg_fdist', 'neg_fdist']).to_csv(absolute_path + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), index=False)
     ### link queue duration
     pd.DataFrame([(link.id, link.queue_start_t, link.queue_end_t) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'queue_start_t', 'queue_end_t']).to_csv(absolute_path + simulation_outputs + '/link_stats/link_queue_duration_{}.csv'.format(scen_nm), index=False)
 
 if __name__ == '__main__':
     # for commscen in [0, 1, 2]:
-    #     for reroute_flag in [False, True]:
-    #         main(random_seed=0, reroute_flag=reroute_flag, dept_time_id='precalculated', firescen=1, commscen=commscen, popscen=1500)
-    main(random_seed=0, dept_time_id='precalculated', firescen=2, commscen=1, popscen=1500)
+    #     for firescen in [1, 2, 3]:
+    #         main(random_seed=0, dept_time_id='precalculated', firescen=firescen, commscen=commscen)
+    # main(random_seed=0, dept_time_id='precalculated', firescen=3, commscen=0, popscen=1500)
+    main(random_seed=0, dept_time_id='precalculated', firescen=3, commscen=0, popscen=1500, scen='_test')
 
 
