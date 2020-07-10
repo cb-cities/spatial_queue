@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH -J test_evacuation
-#SBATCH -o out_cf_r1.out
-#SBATCH -e err_cf_r1.err
-#SBATCH -t 06:30:00
+#SBATCH -J berkeley_evacuation
+#SBATCH -o r1_50.out
+#SBATCH -e r1_50.err
+#SBATCH -t 03:30:00
 #SBATCH -p skx-normal
 #SBATCH -N 3
 #SBATCH --ntasks-per-node=1
@@ -25,7 +25,7 @@ mkdir -p $scratch_folder/link_stats
 # Launcher to use multicores on node
 export LAUNCHER_WORKDIR=$PWD
 export LAUNCHER_PPN=1
-export LAUNCHER_JOB_FILE=joblist_cf_r1
+export LAUNCHER_JOB_FILE=joblist_r1_50
 export LAUNCHER_SCHED=interleaved
 
 $LAUNCHER_DIR/paramrun

@@ -223,13 +223,14 @@ class Link:
             g.update_edge(self.start_nid+1, self.end_nid+1, c_double(self.travel_time))
 
 class Agent:
-    def __init__(self, id, origin_nid, destin_nid, dept_time, veh_len):
+    def __init__(self, id, origin_nid, destin_nid, dept_time, veh_len, gps_reroute):
         #input
         self.id = id
         self.origin_nid = origin_nid
         self.destin_nid = destin_nid
         self.dept_time = dept_time
         self.veh_len = veh_len
+        self.gps_reroute = gps_reroute
         ### derived
         self.cls = 'vn{}'.format(self.origin_nid) # current link start node
         self.cle = self.origin_nid # current link end node
@@ -343,6 +344,8 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     links_df0['fft'] = links_df0['length']/links_df0['maxmph']*2.237
     links_df0['capacity'] = 1900*links_df0['lanes']
     links_df0 = links_df0[['edge_id_igraph', 'start_igraph', 'end_igraph', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
+    links_df0.to_csv(scratch_dir + simulation_outputs + '/modified_network_edges.csv', index=False)
+    # sys.exit(0)
 
     nodes_df0 = pd.read_csv(work_dir + network_file_nodes)
 
@@ -374,7 +377,7 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     return g, nodes, links
 
 
-def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=0, phase_scale=None):
+def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=0, phase_scale=None, reroute_pct=0):
     logger = logging.getLogger("bk_evac")
 
     all_od_list = []
@@ -403,6 +406,8 @@ def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=
             od['dept_time'] += od['phase_offset']
         ### assign vehicle length
         od['veh_len'] = np.random.choice([8, 18], size=od.shape[0], p=[1-tow_pct, tow_pct])
+        ### assign rerouting choice
+        od['gps_reroute'] = np.random.choice([0, 1], size=od.shape[0], p=[1-reroute_pct, reroute_pct])
         all_od_list.append(od)
 
     all_od = pd.concat(all_od_list, sort=False, ignore_index=True)
@@ -413,7 +418,7 @@ def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=
 
     agents = []
     for row in all_od.itertuples():
-        agents.append(Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len')))    
+        agents.append(Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len'), getattr(row, 'gps_reroute')))    
     return agents
 
 def map_sp(agent_id):
@@ -421,7 +426,7 @@ def map_sp(agent_id):
     subp_agent.get_path()
     return (agent_id, subp_agent)
 
-def route(scen_nm=''):
+def route(scen_nm='', who=None):
     logger = logging.getLogger("bk_evac")
     
     ### Build a pool
@@ -430,7 +435,13 @@ def route(scen_nm=''):
 
     ### Find shortest pathes
     t_odsp_0 = time.time()
-    map_agent = [k for k, v in agent_id_dict.items() if v.cle != None]
+    if who=='all':
+        map_agent = [k for k, v in agent_id_dict.items() if (v.cle != None)]
+    elif who=='gps':
+        map_agent = [k for k, v in agent_id_dict.items() if (v.cle != None) and (v.gps_reroute == True)]
+    else:
+        print('Unknown routing partition')
+        sys.exit(0)
     res = pool.imap_unordered(map_sp, map_agent)
 
     ### Close the pool
@@ -447,7 +458,7 @@ def route(scen_nm=''):
     return t_odsp_1-t_odsp_0, len(map_agent)
 
 
-def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_flag=None, phase_scale=None, counterflow=None, transfer_s=None, transfer_e=None):
+def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_flag=None, reroute_pct=None, phase_scale=None, counterflow=None, transfer_s=None, transfer_e=None):
     ### logging and global variables
     random.seed(random_seed)
     np.random.seed(random_seed)
@@ -465,14 +476,21 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     network_file_nodes = '/projects/berkeley/network_inputs/osm_nodes.csv'
     demand_files = ["/projects/berkeley/demand_inputs/od_rs{}_hhv{}.csv".format(random_seed, hh_veh)]
     simulation_outputs = '/projects/berkeley/simulation_outputs'
-    if counterflow=='ms':
-        cf_files = ['/projects/berkeley/network_inputs/marin.csv', '/projects/berkeley/network_inputs/spruce.csv']
-    elif counterflow=='st':
-        cf_files = ['/projects/berkeley/network_inputs/shasta.csv']
+    # if counterflow=='ms':
+    #     cf_files = ['/projects/berkeley/network_inputs/marin.csv', '/projects/berkeley/network_inputs/spruce.csv']
+    # elif counterflow=='st':
+    #     cf_files = ['/projects/berkeley/network_inputs/shasta.csv']
+    if counterflow:
+        cf_files = ['/projects/berkeley/network_inputs/marin.csv', 
+        '/projects/berkeley/network_inputs/spruce.csv',
+        '/projects/berkeley/network_inputs/cedar.csv',
+        '/projects/berkeley/network_inputs/rose.csv',
+        '/projects/berkeley/network_inputs/shasta.csv',
+        ]
     else:
         cf_files = []
 
-    scen_nm = 'rs{}_f{}_dt{}_tow{}_hhv{}_r{}_ps{}_cf{}'.format(random_seed, fire_speed, dept_time_id, tow_pct, hh_veh, reroute_flag, phase_scale, counterflow)
+    scen_nm = 'rs{}_f{}_dt{}_tow{}_hhv{}_r{}_ps{}_cf{}'.format(random_seed, fire_speed, dept_time_id, tow_pct, hh_veh, reroute_pct, phase_scale, counterflow)
     logger = logging.getLogger("bk_evac")
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
     logging.info(scen_nm)
@@ -497,7 +515,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     evacuation_zone = evacuation_zone_gdf['geometry'].iloc[0]
     evacuation_buffer = evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).to_crs('epsg:4326').iloc[0]
 
-    agents = demand(nodes_osmid_dict, dept_time=dept_time, demand_files = demand_files, tow_pct=tow_pct, phase_scale=phase_scale)
+    agents = demand(nodes_osmid_dict, dept_time=dept_time, demand_files = demand_files, tow_pct=tow_pct, phase_scale=phase_scale, reroute_pct=reroute_pct)
     agent_id_dict = {agent.id: agent for agent in agents}
 
     ### fire growth
@@ -507,7 +525,10 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     
     t_s, t_e = 0, 12000
     move = 0
-    t_stats = []
+    ### time step output
+    with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
+        t_stats_outfile.write(",".join(['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts', 'spruce_flow', 'hearst_flow', 'other_flow', 'spruce_q', 'hearst_q'])+"\n")
+
     for t in range(t_s, t_e):
         t_spruce_flow, t_hearst_flow, t_other_flow = 0, 0, 0
         ### routing
@@ -515,7 +536,8 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
             ### update link travel time
             for link_id, link in link_id_dict.items(): link.update_travel_time(t, link_time_lookback_freq)
             ### route
-            route(scen_nm=scen_nm)
+            if t==0: route(scen_nm=scen_nm, who='all')
+            else: route(scen_nm=scen_nm, who='gps')
         ### load agents
         for agent_id, agent in agent_id_dict.items(): agent.load_trips(t)
         ### link model
@@ -539,15 +561,17 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
             outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = outside_polygon(evacuation_zone, evacuation_buffer, veh_loc)
             spruce_q = len(link_id_dict[28224].queue_veh)
             hearst_q = len(link_id_dict[19355].queue_veh)
-            t_stats.append([t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, t_spruce_flow, t_hearst_flow, t_other_flow, spruce_q, hearst_q])
+            # t_stats.append([t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, t_spruce_flow, t_hearst_flow, t_other_flow, spruce_q, hearst_q])
+            with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm),'a') as t_stats_outfile:
+                t_stats_outfile.write(",".join([str(x) for x in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, t_spruce_flow, t_hearst_flow, t_other_flow, spruce_q, hearst_q]]) + "\n")
         ### stepped outputs
         if t%100==0:
             link_output = pd.DataFrame([(link.id, len(link.queue_veh), len(link.run_veh), round(link.travel_time, 2)) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'q', 'r', 't'])
             link_output[(link_output['q']>0) | (link_output['r']>0)].reset_index(drop=True).to_csv(scratch_dir + simulation_outputs + '/link_stats/link_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
         if t%100==0: 
-            logging.info(" ".join([str(i) for i in t_stats[-1]]) + " " + str(len(veh_loc)))
+            logging.info(" ".join([str(i) for i in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + " " + str(len(veh_loc)))
     
-    pd.DataFrame(t_stats, columns=['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts', 'spruce_flow', 'hearst_flow', 'other_flow', 'spruce_q', 'hearst_q']).to_csv(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), index=False)
+    # pd.DataFrame(t_stats, columns=['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts', 'spruce_flow', 'hearst_flow', 'other_flow', 'spruce_q', 'hearst_q']).to_csv(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), index=False)
 
 
 

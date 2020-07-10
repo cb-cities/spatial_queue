@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -J berkeley_evacuation
-#SBATCH -o r0_2.out
-#SBATCH -e r0_2.err
+#SBATCH -o r0_3.out
+#SBATCH -e r0_3.err
 #SBATCH -t 05:30:00
 #SBATCH -p skx-normal
-#SBATCH -N 1 -n 26
+#SBATCH -N 1 -n 3
 
 module purge
 module load TACC
@@ -22,8 +22,8 @@ mkdir -p $scratch_folder/link_stats
 
 # Launcher to use multicores on node
 export LAUNCHER_WORKDIR=$PWD
-export LAUNCHER_PPN=26
-export LAUNCHER_JOB_FILE=joblist_cf_r0_2
+export LAUNCHER_PPN=3
+export LAUNCHER_JOB_FILE=joblist_r0_3
 export LAUNCHER_SCHED=interleaved
 
 $LAUNCHER_DIR/paramrun
