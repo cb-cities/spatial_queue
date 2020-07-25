@@ -101,11 +101,11 @@ class Node:
         op_go_vehs_list = self.find_go_vehs(op_go_link)
         self.go_vehs += [veh for veh in op_go_vehs_list if veh[-1]>-45] ### only straight ahead or right turns allowed for vehicles from the opposite side
 
-    def run_node_model(self, t_now, transfer_s, transfer_e):
+    def run_node_model(self, t_now):
         logger = logging.getLogger("bk_evac")
         self.non_conflict_vehs(t_now=t_now)
         node_move = 0
-        # if self.id == 1626: logging.info("all " + " ".join([str(item) for go_veh in self.go_vehs for item in go_veh]))
+        traffic_counter = {21806: 0, 11321:0}
         ### Agent reaching destination
         for [agent_id, next_node, il, ol, agent_dir] in self.go_vehs:
             veh_len = agent_id_dict[agent_id].veh_len
@@ -114,7 +114,7 @@ class Node:
                 node_move += 1
                 ### before move agent as it uses the old agent.cl_enter_time
                 link_id_dict[il].send_veh(t_now, agent_id)
-                agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'arr', il, ol, transfer_s, transfer_e)
+                agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'arr', il, ol)
             ### no storage capacity downstream
             elif link_id_dict[ol].st_c < veh_len:
                 pass ### no blocking, as # veh = # lanes
@@ -123,8 +123,10 @@ class Node:
                 node_move += 1
                 ### before move agent as it uses the old agent.cl_enter_time
                 link_id_dict[il].send_veh(t_now, agent_id)
-                agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'flow', il, ol, transfer_s, transfer_e)
+                agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'flow', il, ol)
                 link_id_dict[ol].receive_veh(agent_id)
+                for count_loc in traffic_counter.keys():
+                    if ol == count_loc: traffic_counter[count_loc] += 1
             ### either inlink-sending or outlink-receiving or both exhaust
             else:
                 control_cap = min(link_id_dict[il].ou_c, link_id_dict[ol].in_c)
@@ -133,17 +135,19 @@ class Node:
                     node_move += 1
                     ### before move agent as it uses the old agent.cl_enter_time
                     link_id_dict[il].send_veh(t_now, agent_id)
-                    agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'chance', il, ol, transfer_s, transfer_e)
+                    agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'chance', il, ol)
                     link_id_dict[ol].receive_veh(agent_id)
+                    for count_loc in traffic_counter.keys():
+                        if ol == count_loc: traffic_counter[count_loc] += 1
                 else:
                     if link_id_dict[il].ou_c < link_id_dict[ol].in_c:
-                       link_id_dict[il].ou_c = max(0, link_id_dict[il].ou_c-1)
+                        link_id_dict[il].ou_c = max(0, link_id_dict[il].ou_c-1)
                     elif link_id_dict[ol].in_c < link_id_dict[il].ou_c:
                         link_id_dict[ol].in_c = max(0, link_id_dict[ol].in_c-1)
                     else:
                         link_id_dict[il].ou_c -= 1
                         link_id_dict[ol].in_c -= 1
-        return node_move
+        return node_move, traffic_counter
 
 class Link:
     def __init__(self, id, lanes, length, fft, capacity, type, start_nid, end_nid, geometry):
@@ -237,14 +241,11 @@ class Agent:
         agent_dir = np.arctan2(det, dot)*180/np.pi 
         return agent_next_node, ol, agent_dir
     
-    def move_agent(self, t_now, new_cls, new_cle, new_status, il, ol, transfer_s, transfer_e):
+    def move_agent(self, t_now, new_cls, new_cle, new_status, il, ol):
         self.cls = new_cls
         self.cle = new_cle
         self.status = new_status
         self.cl_enter_time = t_now
-        ### pass key location
-        if (il==transfer_s) and (ol==transfer_e): return 1
-        else: return 0
 
     def get_path(self):
         sp = g.dijkstra(self.cle+1, self.destin_idsp)
@@ -300,6 +301,8 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     links_df0['maxmph'] = np.where(links_df0['type'].isin(['primary', 'primary_link']), 55, links_df0['maxmph'])
     links_df0['maxmph'] = np.where(links_df0['type'].isin(['secondary', 'secondary_link', 'tertiary', 'tertiary_link']), 25, links_df0['maxmph'])
     links_df0['maxmph'] = np.where(links_df0['type'].isin(['residential', 'unclassified']), 25*0.8, links_df0['maxmph'])
+    ### block some roads
+    links_df0['maxmph'] = np.where(links_df0['edge_id_igraph'].isin([24197, 3372, 8784]), 0.01, links_df0['maxmph'])
     if len(cf_files)>0:
         ### read counterflow links
         cf_links = []
@@ -358,6 +361,7 @@ def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=
     [dept_time_mean, dept_time_std, dept_time_min, dept_time_max] = dept_time
     for demand_file in demand_files:
         od = pd.read_csv(work_dir + demand_file)
+        od = od[od['evac_zone'].isin([9,10,11,12,13,14])].copy()
         ### transform OSM based id to graph node id
         od['origin_nid'] = od['o_osmid'].apply(lambda x: nodes_osmid_dict[x])
         od['destin_nid'] = od['d_osmid'].apply(lambda x: nodes_osmid_dict[x])
@@ -428,7 +432,7 @@ def link_model_worker(arg):
     link, t = arg
     link.run_link_model(t)
 
-def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_pct=None, phase_tdiff=None, counterflow=None, transfer_s=None, transfer_e=None):
+def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_pct=None, phase_tdiff=None, counterflow=None):
     ### logging and global variables
     random.seed(random_seed)
     np.random.seed(random_seed)
@@ -447,7 +451,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     else:
         cf_files = []
 
-    scen_nm = 'rs{}_r{}_pt{}_cf{}'.format(random_seed, reroute_pct, phase_tdiff, counterflow)
+    scen_nm = 'rs{}_r{}_pt{}_cf{}_9-14'.format(random_seed, reroute_pct, phase_tdiff, counterflow)
     logger = logging.getLogger("bk_evac")
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
     logging.info(scen_nm)
@@ -480,10 +484,11 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     # fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
     # fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads))
     
-    t_s, t_e = 0, 1500
+    t_s, t_e = 0, 30001
+    traffic_counter = dict()
     ### time step output
     with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
-        t_stats_outfile.write(",".join(['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts'])+"\n")
+        t_stats_outfile.write(",".join(['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts', 'into_21806', 'into_11321'])+"\n")
 
     for t in range(t_s, t_e):
         move = 0
@@ -507,12 +512,15 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         ### node model
         t_node_0 = time.time()
         for node_id, node in node_id_dict.items(): 
-            n_t_move = node.run_node_model(t, transfer_s, transfer_e)
+            n_t_move, t_traffic_counter = node.run_node_model(t)
             move += n_t_move
+            for k, v in t_traffic_counter.items():
+                try: traffic_counter[k] += v
+                except KeyError: traffic_counter[k] = v
         t_node_1 = time.time()
         print(t, t_node_1 - t_node_0, t_link_1 - t_link_0)
         ### metrics
-        if t%100 == 0:
+        if t%1000 == 0:
             arrival_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='arr'])
             if arrival_cnts == len(agent_id_dict):
                 logging.info("all agents arrive at destinations")
@@ -523,15 +531,15 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
             # outside_danger_cnts = np.sum(fire_point_distance(veh_loc)>5000)
             outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = outside_polygon(evacuation_zone, evacuation_buffer, veh_loc)
             with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm),'a') as t_stats_outfile:
-                t_stats_outfile.write(",".join([str(x) for x in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + "\n")
+                t_stats_outfile.write(",".join([str(x) for x in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, traffic_counter[21806], traffic_counter[11321]]]) + "\n")
         ### stepped outputs
-        if t%100==0:
+        if t%1000==0:
             link_output = pd.DataFrame([(link.id, len(link.queue_veh), len(link.run_veh), round(link.travel_time, 2)) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'q', 'r', 't'])
             link_output[(link_output['q']>0) | (link_output['r']>0)].reset_index(drop=True).to_csv(scratch_dir + simulation_outputs + '/link_stats/link_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
             node_predepart = pd.DataFrame([(agent.cle, 1) for agent in agent_id_dict.values() if (agent.status in [None, 'loaded'])], columns=['node_id', 'predepart_cnt']).groupby('node_id').agg({'predepart_cnt': np.sum}).reset_index()
             node_predepart.to_csv(scratch_dir + simulation_outputs + '/node_stats/node_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
 
-        if t%100==0: 
+        if t%1000==0: 
             logging.info(" ".join([str(i) for i in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + " " + str(len(veh_loc)))
 
 ### python3 -c 'import dta_meso_butte; dta_meso_butte.main(random_seed=0, dept_time_id="imm", reroute_pct=0, phase_tdiff=0, counterflow=0)'
