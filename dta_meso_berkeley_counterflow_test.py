@@ -185,7 +185,7 @@ class Link:
         self.end_nid = end_nid
         self.geometry = loads(geometry)
         ### derived
-        self.store_cap = max(18, length*lanes) ### at least allow any vehicle to pass. i.e., the road won't block any vehicle because of the road length
+        self.store_cap = max(15, length*lanes) ### at least allow any vehicle to pass. i.e., the road won't block any vehicle because of the road length
         self.in_c = self.capacity/3600.0 # capacity in veh/s
         self.ou_c = self.capacity/3600.0
         self.st_c = self.store_cap # remaining storage capacity
@@ -396,12 +396,12 @@ def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=
             truncnorm_a, truncnorm_b = (dept_time_min-dept_time_mean)/dept_time_std, (dept_time_max-dept_time_mean)/dept_time_std
             od['dept_time'] = truncnorm.rvs(truncnorm_a, truncnorm_b, loc=dept_time_mean, scale=dept_time_std, size=od.shape[0])
             od['dept_time'] = od['dept_time'].astype(int)
-            od.to_csv(scratch_dir + '/od.csv', index=False)
-            sys.exit(0)
+            # od.to_csv(scratch_dir + '/od.csv', index=False)
+            # sys.exit(0)
         if phase_tdiff is not None:
             od['dept_time'] += (od['evac_zone']-1)*phase_tdiff*60 ### t_diff in minutes
         ### assign vehicle length
-        od['veh_len'] = np.random.choice([8, 18], size=od.shape[0], p=[1-tow_pct, tow_pct])
+        od['veh_len'] = np.random.choice([8, 15], size=od.shape[0], p=[1-tow_pct, tow_pct])
         ### assign rerouting choice
         od['gps_reroute'] = np.random.choice([0, 1], size=od.shape[0], p=[1-reroute_pct, reroute_pct])
         all_od_list.append(od)
@@ -561,6 +561,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
 
         if t%100==0: 
             logging.info(" ".join([str(i) for i in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + " " + str(len(veh_loc)))
+            print(link_id_dict[20158])
 
 
 

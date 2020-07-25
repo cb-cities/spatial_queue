@@ -2,7 +2,7 @@
 #SBATCH -J berkeley_evacuation
 #SBATCH -o r1.out
 #SBATCH -e r1.err
-#SBATCH -t 10:30:00
+#SBATCH -t 4:30:00
 #SBATCH -p skx-normal
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=9
@@ -26,7 +26,7 @@ export OUTPUT_FOLDER=$scratch_folder
 
 # Launcher to use multicores on node
 export LAUNCHER_WORKDIR=$PWD
-export LAUNCHER_PPN=6
+export LAUNCHER_PPN=9
 export LAUNCHER_JOB_FILE=joblist_r1
 export LAUNCHER_SCHED=interleaved
 
