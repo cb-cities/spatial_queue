@@ -85,7 +85,12 @@ class Node:
         # if self.id == 1626: print(t_now, in_links)
         
         if len(in_links) == 0: return
-        go_link = link_id_dict[random.choice(in_links)]
+        ### roundabout
+        roundabout_in_links = [3770, 37806, 20990, 20158, 6529, 20145, 5498, 20993, 6542]
+        try:
+            go_link = link_id_dict[[l for l in in_links if l in roundabout_in_links][0]]
+        except IndexError:
+            go_link = link_id_dict[random.choice(in_links)]
         # if self.id == 1626: print(t_now, go_link, self.in_links[go_link.id])
         if (28224 in in_links) and (19355 in in_links):
             both_links += 1
@@ -401,7 +406,11 @@ def demand(nodes_osmid_dict, dept_time=[0,0,0,1000], demand_files=None, tow_pct=
         if phase_tdiff is not None:
             od['dept_time'] += (od['evac_zone']-1)*phase_tdiff*60 ### t_diff in minutes
         ### assign vehicle length
-        od['veh_len'] = np.random.choice([8, 15], size=od.shape[0], p=[1-tow_pct, tow_pct])
+        od_tow = od.groupby(['apn', 'hh']).agg({'hh_veh': 'first'}).sample(frac=tow_pct).reset_index()
+        od_tow['veh_len'] = 15
+        od = od.merge(od_tow, how='left', on=['apn', 'hh', 'hh_veh']).fillna(value={'veh_len': 8})
+        # print(od.drop_duplicates(subset=['apn']).shape, od.drop_duplicates(subset=['apn', 'hh']).shape, od.drop_duplicates(subset=['apn', 'hh', 'hh_veh']).shape, np.sum(od['veh_len']==8), np.sum(od['veh_len']==15))
+        # sys.exit(0)
         ### assign rerouting choice
         od['gps_reroute'] = np.random.choice([0, 1], size=od.shape[0], p=[1-reroute_pct, reroute_pct])
         all_od_list.append(od)
@@ -516,7 +525,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
     fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads))
     
-    t_s, t_e = 0, 15000
+    t_s, t_e = 0, 3600*4+1
     ### time step output
     with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
         t_stats_outfile.write(",".join(['t', 'init', 'load', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts'])+"\n")
@@ -561,7 +570,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
 
         if t%100==0: 
             logging.info(" ".join([str(i) for i in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + " " + str(len(veh_loc)))
-            print(link_id_dict[20158])
+        #     print(link_id_dict[20158].queue_veh, link_id_dict[20158].run_veh)
 
 
 

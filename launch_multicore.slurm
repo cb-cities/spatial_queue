@@ -16,7 +16,7 @@ source $HOME/virtualenvs/cities/bin/activate
 export OMP_NUM_THREADS=5
 
 ### folder in $SCRATCH to hold output
-scratch_folder=$SCRATCH/spatial_queue/projects/berkeley/simulation_outputs
+scratch_folder=$SCRATCH/spatial_queue/projects/berkeley/simulation_outputs_roundabouts
 mkdir -p $scratch_folder
 mkdir -p $scratch_folder/log
 mkdir -p $scratch_folder/t_stats
