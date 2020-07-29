@@ -249,7 +249,7 @@ class Agent:
         self.cl_enter_time = None
 
     def load_trips(self, t_now):
-        if (self.dept_time <= t_now):
+        if (self.dept_time <= t_now) and (self.status is None):
             initial_edge = node2link_dict[self.route_igraph[0]]
             link_id_dict[initial_edge].run_veh.append(self.id)
             self.status = 'loaded'
