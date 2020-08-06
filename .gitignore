@@ -1,0 +1,13 @@
+# Ignore everything
+*
+
+# But descend into directories
+!*/
+
+!*.gitignore
+!*.py
+!*.ipynb
+
+# Ignore
+*.ipynb_checkpoints*
+*/**/__init__.py
