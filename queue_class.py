@@ -102,7 +102,7 @@ class Node:
         ### hold subprocess results, avoid writing directly to global variable
         agent_update_dict = dict()
         link_update_dict = dict()
-        
+
         ### Agent reaching destination
         for [agent_id, next_node, il, ol, agent_dir] in go_vehs:
             veh_len = agent_id_dict[agent_id].veh_len
@@ -120,7 +120,10 @@ class Node:
             try:
                 [outflow_link_run_veh, outflow_link_in_c] = link_update_dict[ol]
             except KeyError:
-                outflow_link_run_veh, outflow_link_in_c= link_id_dict[ol].run_veh, link_id_dict[ol].in_c
+                if ol is None:
+                    pass
+                else:
+                    outflow_link_run_veh, outflow_link_in_c= link_id_dict[ol].run_veh, link_id_dict[ol].in_c
 
             ### arrival
             if (next_node is None) and (self.id == agent_id_dict[agent_id].destin_nid):

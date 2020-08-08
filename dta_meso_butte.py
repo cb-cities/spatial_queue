@@ -214,6 +214,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     dept_time = dept_time_dict[dept_time_id]
     global g, agent_id_dict, node_id_dict, link_id_dict, node2link_dict
     
+    multiprocessing_flag = False
     reroute_freq = 10 ### sec
     link_time_lookback_freq = 20 ### sec
     network_file_edges = '/projects/butte_osmnx/network_inputs/butte_edges_sim.csv'
@@ -259,7 +260,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     # # fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
     # # fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads))
     
-    t_s, t_e = 0, 501
+    t_s, t_e = 0, 12001
     traffic_counter = {21806:0, 11321:0}
     ### time step output
     with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
@@ -291,12 +292,12 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         ### link model
         ### Each iteration in the link model is not time-consuming. So just keep using one process.
         t_link_0 = time.time()
-        links_to_run = [link for link in link_id_dict.values() if (len(link.run_veh)>0) or (len(link.queue_veh)>0)]
-        if len(links_to_run) < 100000:
-            for link in links_to_run: link.run_link_model(t, agent_id_dict=agent_id_dict)
+        # links_to_run = [link for link in link_id_dict.values() if (len(link.run_veh)>0) or (len(link.queue_veh)>0)]
+        if not multiprocessing_flag:
+            for link in link_id_dict.values(): link.run_link_model(t, agent_id_dict=agent_id_dict)
         else:
             pool = Pool(10)
-            pool.imap_unordered(link_model_worker, ((link, t) for link in links_to_run), chunksize=500)
+            pool.imap_unordered(link_model_worker, ((link, t) for link in link_id_dict.values()), chunksize=500)
             pool.close()
             pool.join()
         t_link_1 = time.time()
@@ -304,7 +305,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         ### node model
         t_node_0 = time.time()
         node_ids_to_run = set([link.end_nid for link in link_id_dict.values() if len(link.queue_veh)>0])
-        if len(node_ids_to_run)<1000000:
+        if (not multiprocessing_flag) or (len(node_ids_to_run)<100):
             for node_id in node_ids_to_run:
                 node = node_id_dict[node_id] 
                 n_t_move, t_traffic_counter, agent_update_dict, link_update_dict = node.run_node_model(t, node_id_dict=node_id_dict, link_id_dict=link_id_dict, agent_id_dict=agent_id_dict, node2link_dict=node2link_dict)
@@ -340,7 +341,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         #     except KeyError: traffic_counter[k] = v
         t_node_1 = time.time()
         t_tstep_1 = time.time()
-        print(t, len(node_ids_to_run), t_node_1 - t_node_0, len(links_to_run), t_link_1 - t_link_0, t_tstep_1-t_tstep_0)
+        # print(t, len(node_ids_to_run), t_node_1 - t_node_0, len(links_to_run), t_link_1 - t_link_0, t_tstep_1-t_tstep_0)
 
         ### metrics
         if t%100 == 0:
@@ -351,8 +352,8 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
             veh_loc = [link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint for agent in agent_id_dict.values() if agent.status != 'arr']
             # avg_fire_dist, neg_dist = fire_frontier_distance(fire_frontier, veh_loc, t)
             avg_fire_dist, neg_dist = 0, 0
-            # outside_danger_cnts = np.sum(fire_point_distance(veh_loc)>5000)
             outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = outside_polygon(evacuation_zone, evacuation_buffer, veh_loc)
+            # outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = 0, 0
             with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm),'a') as t_stats_outfile:
                 t_stats_outfile.write(",".join([str(x) for x in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, traffic_counter[21806], traffic_counter[11321]]]) + "\n")
         
