@@ -14,7 +14,6 @@ import scipy.io as sio
 import geopandas as gpd
 from shapely.wkt import loads
 import scipy.sparse as ssparse
-import multiprocessing
 from multiprocessing import Pool
 from scipy.stats import truncnorm
 ### dir
