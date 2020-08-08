@@ -304,7 +304,6 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         ### node model
         t_node_0 = time.time()
         node_ids_to_run = set([link.end_nid for link in link_id_dict.values() if len(link.queue_veh)>0])
-        # n_t_move = 0
         if len(node_ids_to_run)<1000000:
             for node_id in node_ids_to_run:
                 node = node_id_dict[node_id] 
@@ -322,44 +321,20 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         else:
             pool = Pool(10)
             res = pool.imap_unordered(node_model_worker, ((node_id, t) for node_id in node_ids_to_run), chunksize=100)
-            # res = pool.map(node_model_worker, ((node_id, t) for node_id in node_ids_to_run), chunksize=1)
             pool.close()
             pool.join()
-            # print(len(node_ids_to_run))
             n_update = 0
             for (n_t_move, t_traffic_counter, agent_update_dict, link_update_dict) in res:
-                # n_update += 1
                 move += n_t_move
-                # previous_link_queue, previous_link_run = dict(), dict()
-                # print(t, len(agent_update_dict), len(link_update_dict))
                 for agent_id, agent_new_info in agent_update_dict.items():
                     [agent_id_dict[agent_id].cls, agent_id_dict[agent_id].cle, agent_id_dict[agent_id].status, agent_id_dict[agent_id].cl_enter_time] = agent_new_info
                 for link_id, link_new_info in link_update_dict.items():
-                    # if link_id==0:
-                    #     print(link_id, len(list(res)))
-                    # previous_link_queue[link_id] = link_id_dict[link_id].queue_veh
-                    # previous_link_run[link_id] = link_id_dict[link_id].run_veh
                     if len(link_new_info) == 3:
                         [link_id_dict[link_id].queue_veh, link_id_dict[link_id].ou_c, link_id_dict[link_id].travel_time_list] = link_new_info
                     elif len(link_new_info) == 2:
                         [link_id_dict[link_id].run_veh, link_id_dict[link_id].in_c] = link_new_info
                     else:
                         print('invalid link update information')
-                # for agent_id in agent_id_dict.keys():
-                #     agent = agent_id_dict[agent_id]
-                #     if agent_id in link_id_dict[node2link_dict[(agent.cls, agent.cle)]].queue_veh + link_id_dict[node2link_dict[(agent.cls, agent.cle)]].run_veh:
-                #         pass
-                #     else:
-                #         print(agent_id, agent.cl_enter_time, agent.cls, agent.cle, link_id_dict[node2link_dict[(agent.cls, agent.cle)]].queue_veh, link_id_dict[node2link_dict[(agent.cls, agent.cle)]].run_veh)
-            # print('end node model of time ', t, n_update)
-            # for agent_id, agent in agent_id_dict.items():
-            #     if agent_id in link_id_dict[node2link_dict[(agent.cls, agent.cle)]].queue_veh + link_id_dict[node2link_dict[(agent.cls, agent.cle)]].run_veh:
-            #         pass
-            #     else:
-            #         print(agent_id, agent.cl_enter_time, agent.cls, agent.cle, link_id_dict[node2link_dict[(agent.cls, agent.cle)]].queue_veh, link_id_dict[node2link_dict[(agent.cls, agent.cle)]].run_veh)
-            #         print(agent.route_igraph)
-                    # sys.exit(0)
-        # move += n_t_move
         # for k, v in t_traffic_counter.items():
         #     try: traffic_counter[k] += v
         #     except KeyError: traffic_counter[k] = v

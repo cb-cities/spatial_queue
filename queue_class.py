@@ -69,14 +69,11 @@ class Node:
         return go_vehs_list
 
     def non_conflict_vehs(self, t_now, link_id_dict=None, agent_id_dict=None, node2link_dict=None, node_id_dict=None):
-        # if self.id==7066:
-        #     print('node 7066')
         
         # self.go_vehs = []
         go_vehs = []
         ### a primary direction
         in_links = [l for l in self.in_links.keys() if len(link_id_dict[l].queue_veh)>0]
-        # if self.id == 1626: print(t_now, in_links)
         
         if len(in_links) == 0: return go_vehs
         go_link = link_id_dict[random.choice(in_links)]
@@ -84,7 +81,6 @@ class Node:
         go_vehs_list = self.find_go_vehs(go_link, agent_id_dict=agent_id_dict, link_id_dict=link_id_dict, node2link_dict=node2link_dict, node_id_dict=node_id_dict)
         # self.go_vehs += go_vehs_list
         go_vehs += go_vehs_list
-        # if self.id == 1626: print(t_now, self.go_vehs[0])
         
         ### a non-conflicting direction
         if (np.min([veh[-1] for veh in go_vehs_list])<-45) or (go_link.type=='v'): return go_vehs ### no opposite veh allows to move if there is left turn veh in the primary direction; or if the primary incoming link is a virtual link
@@ -106,8 +102,7 @@ class Node:
         ### hold subprocess results, avoid writing directly to global variable
         agent_update_dict = dict()
         link_update_dict = dict()
-        # if self.id==7066:
-        #     print('node 7066')
+        
         ### Agent reaching destination
         for [agent_id, next_node, il, ol, agent_dir] in go_vehs:
             veh_len = agent_id_dict[agent_id].veh_len
@@ -126,10 +121,6 @@ class Node:
                 [outflow_link_run_veh, outflow_link_in_c] = link_update_dict[ol]
             except KeyError:
                 outflow_link_run_veh, outflow_link_in_c= link_id_dict[ol].run_veh, link_id_dict[ol].in_c
-            
-            # if travel_time is None:
-            #     print(inflow_link_travel_time_list)
-            #     sys.exit(0)
 
             ### arrival
             if (next_node is None) and (self.id == agent_id_dict[agent_id].destin_nid):
