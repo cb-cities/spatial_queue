@@ -226,6 +226,9 @@ class Link:
         ### remaining spaces on link for the node model to move vehicles to this link
         self.st_c = self.store_cap - np.sum([agent_id_dict[agent_id].veh_len for agent_id in self.run_veh+self.queue_veh])
         self.in_c, self.ou_c = self.capacity/3600, self.capacity/3600
+
+    def close_road(self):
+        self.ou_c = 0
     
     def update_travel_time(self, t_now, link_time_lookback_freq=None, g=None, update_graph=False):
         self.travel_time_list = [(t_rec, dur) for (t_rec, dur) in self.travel_time_list if (t_now-t_rec < link_time_lookback_freq)]

@@ -186,7 +186,7 @@ def node_model_worker(arg):
     node_move, traffic_counter, agent_update_dict, link_update_dict = node.run_node_model(t, node_id_dict=node_id_dict, link_id_dict=link_id_dict, agent_id_dict=agent_id_dict, node2link_dict=node2link_dict)
     return (node_move, traffic_counter, agent_update_dict, link_update_dict)
 
-def main(fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_pct=None, phase_tdiff=None, counterflow=None):
+def main(fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_pct=0, phase_tdiff=None, counterflow=None, green_ratio=None):
     ### logging and global variables
     dept_time_dict = {'imm': [0,0,0,1000]}
     dept_time = dept_time_dict[dept_time_id]
@@ -201,7 +201,7 @@ def main(fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_
     else:
         cf_files = []
 
-    scen_nm = 'dt{}'.format(dept_time_id)
+    scen_nm = 'dt{}_g{}'.format(dept_time_id, green_ratio)
     logger = logging.getLogger("butte")
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
     logging.info(scen_nm)
@@ -223,14 +223,8 @@ def main(fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_
     ### demand
     agents = demand(nodes_osmid_dict, dept_time=dept_time, demand_files = demand_files, phase_tdiff=phase_tdiff, reroute_pct=reroute_pct)
     agent_id_dict = {agent.id: agent for agent in agents}
-
-    # ### fire growth
-    # # fire_frontier = pd.read_csv(open(work_dir + '/projects/berkeley/demand_inputs/fire_fitted_ellipse.csv'))
-    # # fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
-    # # fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads))
     
     t_s, t_e = 0, 12001
-    # traffic_counter = {21806:0, 11321:0}
     ### time step output
     with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
         t_stats_outfile.write(",".join(['t', 'arr', 'move'])+"\n")
@@ -248,6 +242,9 @@ def main(fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_
         ### link model
         ### Each iteration in the link model is not time-consuming. So just keep using one process.
         for link in link_id_dict.values(): link.run_link_model(t, agent_id_dict=agent_id_dict)
+        if (green_ratio<1) and (t%60 > 60*green_ratio):
+            for link in [20964]: ### link at the chico end of Skyway
+                link_id_dict[link].close_road()
         
         ### node model
         node_ids_to_run = set([link.end_nid for link in link_id_dict.values() if len(link.queue_veh)>0])
@@ -287,4 +284,4 @@ def main(fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_
 
 ### python3 -c 'import dta_meso_butte; dta_meso_butte.main(random_seed=0, dept_time_id="imm", reroute_pct=0, phase_tdiff=0, counterflow=0)'
 if __name__ == "__main__":
-    main(dept_time_id='imm', phase_tdiff=None, reroute_pct=0, counterflow=0)
+    main(dept_time_id='imm', green_ratio=0.5)
