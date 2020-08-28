@@ -15,8 +15,8 @@ sys.path.insert(0, home_dir+'/..')
 from sp import interface
 
 class Node:
-    def __init__(self, id, lon, lat, stype, osmid=None):
-        self.id = id
+    def __init__(self, node_id, lon, lat, stype, osmid=None):
+        self.id = node_id
         self.lon = lon
         self.lat = lat
         self.type = stype
@@ -183,9 +183,9 @@ class Node:
         return node_move, traffic_counter, agent_update_dict, link_update_dict
 
 class Link:
-    def __init__(self, id, lanes, length, fft, capacity, type, start_nid, end_nid, geometry):
+    def __init__(self, link_id, lanes, length, fft, capacity, type, start_nid, end_nid, geometry):
         ### input
-        self.id = id
+        self.id = link_id
         self.lanes = lanes
         self.length = length
         self.fft = fft

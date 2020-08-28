@@ -117,32 +117,7 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
 def demand(nodes_osmid_dict, dept_time_df=None, demand_files=None, tow_pct=0, phase_tdiff=None, reroute_pct=0):
     # logger = logging.getLogger("butte_evac")
 
-    all_od_list = []
-    for demand_file in demand_files:
-        od = pd.read_csv(work_dir + demand_file)
-        ### transform OSM based id to graph node id
-        od['origin_nid'] = od['origin_osmid'].apply(lambda x: nodes_osmid_dict[str(x)])
-        od['destin_nid'] = od['destin_osmid'].apply(lambda x: nodes_osmid_dict[x])
-        ### assign agent id
-        if 'agent_id' not in od.columns: od['agent_id'] = np.arange(od.shape[0])
-        ### assign departure time. dept_time_std == 0 --> everyone leaves at the same time
-        od = od.merge(dept_time_df, how='left', on='evac_zone')
-        ### assign vehicle length
-        od['veh_len'] = np.random.choice([8, 18], size=od.shape[0], p=[1-tow_pct, tow_pct])
-        ### assign rerouting choice
-        od['gps_reroute'] = np.random.choice([0, 1], size=od.shape[0], p=[1-reroute_pct, reroute_pct])
-        all_od_list.append(od)
-
-    all_od = pd.concat(all_od_list, sort=False, ignore_index=True)
-    all_od = all_od.sample(frac=1).reset_index(drop=True) ### randomly shuffle rows
-    logging.info('total numbers of agents from file {}'.format(all_od.shape))
-    # all_od = all_od.iloc[0:3000].copy()
-    logging.info('total numbers of agents taken {}'.format(all_od.shape))
-
-    agents = []
-    for row in all_od.itertuples():
-        agents.append(Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len'), getattr(row, 'gps_reroute')))    
-    return agents
+    x
 
 def map_sp(agent_id):
     subp_agent = agent_id_dict[agent_id]
@@ -217,7 +192,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, dept_time_df=None
 
     scen_nm = "-".join([str(x) for x in dept_time_df['dept_time'].values.tolist()])
     # logger = logging.getLogger("butte_evac")
-    logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
+    logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO, force=True)
     logging.info(scen_nm)
 
     ### network
@@ -249,7 +224,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, dept_time_df=None
     # # fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
     # # fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads))
     
-    t_s, t_e = 0, 1201
+    t_s, t_e = 0, 7201
     traffic_counter = {21806:0, 11321:0}
     ### time step output
     with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
@@ -342,13 +317,14 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, dept_time_df=None
             # avg_fire_dist, neg_dist = fire_frontier_distance(fire_frontier, veh_loc, t)
             # avg_fire_dist, neg_dist = 0, 0
             outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = outside_polygon(evacuation_zone, evacuation_buffer, veh_loc)
-            avg_fire_dist = np.mean(fire_point_distance(veh_loc))
-            neg_dist = 0
+            avg_fire_dist = 0 # np.mean(fire_point_distance(veh_loc))
+            neg_dist = np.sum(fire_point_distance(veh_loc)<4*t)
             with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm),'a') as t_stats_outfile:
                 t_stats_outfile.write(",".join([str(x) for x in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, traffic_counter[21806], traffic_counter[11321]]]) + "\n")
 
             ### fitness metric
-            fitness += avg_fire_dist * len(veh_loc)
+            # fitness += avg_fire_dist * len(veh_loc)
+            fitness += neg_dist
         
         ## stepped outputs
         # if t%12000==0:
