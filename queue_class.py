@@ -231,7 +231,7 @@ class Link:
         self.travel_time_list = [(t_rec, dur) for (t_rec, dur) in self.travel_time_list if (t_now-t_rec < link_time_lookback_freq)]
         if len(self.travel_time_list) > 0:
             self.travel_time = np.mean([dur for (_, dur) in self.travel_time_list])
-            if update_graph: g.update_edge(self.start_nid+1, self.end_nid+1, c_double(self.travel_time))
+            if update_graph: g.update_edge(self.start_nid, self.end_nid, c_double(self.travel_time))
 
 class Agent:
     def __init__(self, id, origin_nid, destin_nid, dept_time, veh_len, gps_reroute):
@@ -245,8 +245,6 @@ class Agent:
         ### derived
         self.cls = 'vn{}'.format(self.origin_nid) # current link start node
         self.cle = self.origin_nid # current link end node
-        self.origin_idsp = self.origin_nid + 1
-        self.destin_idsp = self.destin_nid + 1
         ### Empty
         self.route_igraph = []
         self.find_route = None
@@ -255,7 +253,11 @@ class Agent:
 
     def load_trips(self, t_now, node2link_dict=None, link_id_dict=None):
         if (self.dept_time == t_now):
-            initial_edge = node2link_dict[self.route_igraph[0]]
+            try:
+                initial_edge = node2link_dict[self.route_igraph[0]]
+            except IndexError:
+                print(self.id, self.route_igraph)
+                sys.exit(0)
             link_id_dict[initial_edge].run_veh.append(self.id)
             self.status = 'loaded'
             self.cl_enter_time = t_now
@@ -281,14 +283,14 @@ class Agent:
     #     self.cl_enter_time = t_now
 
     def get_path(self, g=None):
-        sp = g.dijkstra(self.cle+1, self.destin_idsp)
-        sp_dist = sp.distance(self.destin_idsp)
+        sp = g.dijkstra(self.cle, self.destin_nid)
+        sp_dist = sp.distance(self.destin_nid)
 
         if sp_dist > 10e7:
             sp.clear()
             return 'n_a', []
         else:
-            sp_route = sp.route(self.destin_idsp)
-            route_igraph = [(self.cls, self.cle)] + [(start_sp-1, end_sp-1) for (start_sp, end_sp) in sp_route]
+            sp_route = sp.route(self.destin_nid)
+            route_igraph = [(self.cls, self.cle)] + [(start_nid, end_nid) for (start_nid, end_nid) in sp_route]
             sp.clear()
             return 'a', route_igraph
