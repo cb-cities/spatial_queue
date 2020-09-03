@@ -207,6 +207,7 @@ class Link:
         self.travel_time = fft
         self.start_node = None
         self.end_node = None
+        self.status = 'open'
 
     # def send_veh(self, t_now, agent_id, agent_id_dict=None):
     #     ### remove the agent from queue
@@ -226,12 +227,18 @@ class Link:
         ### remaining spaces on link for the node model to move vehicles to this link
         self.st_c = self.store_cap - np.sum([agent_id_dict[agent_id].veh_len for agent_id in self.run_veh+self.queue_veh])
         self.in_c, self.ou_c = self.capacity/3600, self.capacity/3600
+        if self.status=='closed': self.in_c = 0
     
     def update_travel_time(self, t_now, link_time_lookback_freq=None, g=None, update_graph=False):
         self.travel_time_list = [(t_rec, dur) for (t_rec, dur) in self.travel_time_list if (t_now-t_rec < link_time_lookback_freq)]
         if len(self.travel_time_list) > 0:
             self.travel_time = np.mean([dur for (_, dur) in self.travel_time_list])
             if update_graph: g.update_edge(self.start_nid, self.end_nid, c_double(self.travel_time))
+
+    def close_link_to_newcomers(self, g=None):
+        g.update_edge(self.start_nid, self.end_nid, c_double(10e7))
+        self.status = 'closed'
+        ### not updating fft and ou_c because current vehicles need to leave
 
 class Agent:
     def __init__(self, id, origin_nid, destin_nid, dept_time, veh_len, gps_reroute):
@@ -250,31 +257,38 @@ class Agent:
         self.find_route = None
         self.status = None
         self.cl_enter_time = None
+        self.ol = None
+        self.nle = None ### next link end
 
     def load_trips(self, t_now, node2link_dict=None, link_id_dict=None):
         if (self.dept_time == t_now):
-            try:
-                initial_edge = node2link_dict[self.route_igraph[0]]
-            except IndexError:
-                print(self.id, self.route_igraph)
-                sys.exit(0)
+            initial_edge = node2link_dict[self.route_igraph[0]]
             link_id_dict[initial_edge].run_veh.append(self.id)
             self.status = 'loaded'
             self.cl_enter_time = t_now
 
+    def find_next_link(self, node2link_dict=None):
+        
+        if self.destin_nid == self.cle: ### current node is agent destination
+            self.ol = None
+        next_link = [(start, end) for (start, end) in self.route_igraph if start == self.cle]
+        if next_link == []: ### before a route is assigned
+            pass
+        else:
+            self.ol = node2link_dict[next_link[0]]
+            self.nle = next_link[0][1]
+
     def prepare_agent(self, node_id, node2link_dict=None, node_id_dict=None):
         assert self.cle == node_id, "agent next node {} is not the transferring node {}, route {}".format(self.cle, node_id, self.route_igraph)
-        if self.destin_nid == node_id: ### current node is agent destination
-            return None, None, 0 ### id, next_node, dir
-        agent_next_node = [end for (start, end) in self.route_igraph if start == node_id][0]
-        ol = node2link_dict[(node_id, agent_next_node)]
+        if self.destin_nid == self.cle: ### current node is agent destination
+            return None, None, 0
         x_start, y_start = node_id_dict[self.cls].lon, node_id_dict[self.cls].lat
         x_mid, y_mid = node_id_dict[node_id].lon, node_id_dict[node_id].lat
-        x_end, y_end = node_id_dict[agent_next_node].lon, node_id_dict[agent_next_node].lat
+        x_end, y_end = node_id_dict[self.nle].lon, node_id_dict[self.nle].lat
         in_vec, out_vec = (x_mid-x_start, y_mid-y_start), (x_end-x_mid, y_end-y_mid)
         dot, det = (in_vec[0]*out_vec[0] + in_vec[1]*out_vec[1]), (in_vec[0]*out_vec[1] - in_vec[1]*out_vec[0])
         agent_dir = np.arctan2(det, dot)*180/np.pi 
-        return agent_next_node, ol, agent_dir
+        return self.nle, self.ol, agent_dir
     
     # def move_agent(self, t_now, new_cls, new_cle, new_status, il, ol):
     #     self.cls = new_cls
@@ -288,9 +302,16 @@ class Agent:
 
         if sp_dist > 10e7:
             sp.clear()
-            return 'n_a', []
+            return 'no_route'
         else:
             sp_route = sp.route(self.destin_nid)
-            route_igraph = [(self.cls, self.cle)] + [(start_nid, end_nid) for (start_nid, end_nid) in sp_route]
+            self.route_igraph = [(self.cls, self.cle)] + [(start_nid, end_nid) for (start_nid, end_nid) in sp_route]
             sp.clear()
-            return 'a', route_igraph
+            return 'find_route'
+
+    def force_stop(self):
+        self.destin_nid = self.cle
+        self.route_igraph = [(self.cls, self.cle)]
+        self.status = 'shelter'
+        self.ol = None
+        self.nle = None

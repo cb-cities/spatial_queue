@@ -63,6 +63,7 @@ def single_scenario_phase_search(fs=None, fire_df=None):
 
     ### initial fit
     (_, sBest_fit) = fitness(dept_time_list=sBest, fs=fs, fire_df=fire_df)
+    sys.exit(0)
     fit_df = pd.DataFrame( [['-'.join([str(x) for x in sBest]),'init', round(sBest_fit, 2)]], columns= ['zone_dept_time', 'type', 'fitness'])
     with open('tabu_search_r{}_fs{}.csv'.format(rs, fs), 'w') as tabu_search_outfile:
         tabu_search_outfile.write(",".join([str(x) for x in range(1, 15)])+",type," + "fitness" +"\n")
@@ -115,7 +116,7 @@ def single_scenario_phase_search(fs=None, fire_df=None):
 
 def main():
     fire_scenarios_df = fire_scenario_generator()
-    for fs in [3]:
+    for fs in [1]:
         fire_df = fire_scenarios_df[fire_scenarios_df['fire_scenario'].isin([0, fs])].reset_index(drop=True)
         print(fs, fire_df)
         single_scenario_phase_search(fs=fs, fire_df=fire_df)
