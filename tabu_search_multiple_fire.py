@@ -10,8 +10,10 @@ rs = 0
 random.seed(rs)
 np.random.seed(rs)
 
-def fitness(dept_time_list, fs=None, fire_df=None):
+def fitness(arg):
 
+    dept_time_list, fs, fire_df = arg
+    print(fs, dept_time_list)
     zone_dept_time = pd.DataFrame({'evac_zone': list(range(1, 15)), 'dept_time': dept_time_list})
     fitness_score = dta_meso_butte_tabu.main(dept_time_df=zone_dept_time, fs=fs, fire_df=fire_df)
 
@@ -62,8 +64,8 @@ def single_scenario_phase_search(fs=None, fire_df=None):
     sBest = s0
 
     ### initial fit
-    (_, sBest_fit) = fitness(dept_time_list=sBest, fs=fs, fire_df=fire_df)
-    sys.exit(0)
+    (_, sBest_fit) = fitness((sBest, fs, fire_df))
+    # sys.exit(0)
     fit_df = pd.DataFrame( [['-'.join([str(x) for x in sBest]),'init', round(sBest_fit, 2)]], columns= ['zone_dept_time', 'type', 'fitness'])
     with open('tabu_search_r{}_fs{}.csv'.format(rs, fs), 'w') as tabu_search_outfile:
         tabu_search_outfile.write(",".join([str(x) for x in range(1, 15)])+",type," + "fitness" +"\n")
@@ -93,7 +95,7 @@ def single_scenario_phase_search(fs=None, fire_df=None):
         #     'recursion limit reached and no better solution found'
 
         pool = Pool(np.min([6, len(sNeighborhood)]))
-        res = pool.imap_unordered(fitness, sNeighborhood)
+        res = pool.imap_unordered(fitness, [(sn, fs, fire_df) for sn in sNeighborhood])
         pool.close()
         pool.join()
 
@@ -116,7 +118,7 @@ def single_scenario_phase_search(fs=None, fire_df=None):
 
 def main():
     fire_scenarios_df = fire_scenario_generator()
-    for fs in [1]:
+    for fs in [0]:
         fire_df = fire_scenarios_df[fire_scenarios_df['fire_scenario'].isin([0, fs])].reset_index(drop=True)
         print(fs, fire_df)
         single_scenario_phase_search(fs=fs, fire_df=fire_df)

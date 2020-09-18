@@ -67,7 +67,7 @@ def road_to_fire_dist(link_id_dict, fire_df):
             end_node_angle = np.matmul(l23, l21)
             point_line_dist = np.where(start_node_angle<0, start_node_distance,
                                         np.where(end_node_angle<0, end_node_distance, line_dist))
-            link_fire_dist.append([point_line_dist, getattr(fire, 'fire_speed')])
+            link_fire_dist.append([point_line_dist[0], getattr(fire, 'fire_speed')])
         link_fire_dist_dict[getattr(link, 'link_id')] = min(link_fire_dist, key=lambda t: t[0]) ### {link_id: (distance, fire_speed)}
     return link_fire_dist_dict
 
@@ -235,43 +235,54 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, dept_time_df=None
     link_fire_dist_dict = road_to_fire_dist(link_id_dict, fire_df)
     pd.DataFrame([[link_id, link_fire_dist[0], link_id_dict[link_id].geometry] for link_id, link_fire_dist in link_fire_dist_dict.items()], columns=['link_id', 'link_fire_dist', 'geometry']).to_csv(scratch_dir + simulation_outputs + '/fire/road_fire_dist_fs{}.csv'.format(fs), index=False)
     fire_df.to_csv(scratch_dir + simulation_outputs + '/fire/fire_init_fs{}.csv'.format(fs), index=False)
+    # print(link_fire_dist_dict[0])
+    # sys.exit(0)
     
     t_s, t_e = 0, 7201
     ### time step output
     with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
-        t_stats_outfile.write(",".join(['t', 'arr', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts'])+"\n")
-    with open(scratch_dir + simulation_outputs + '/t_stats/t_shelter_{}.csv'.format(scen_nm), 'w') as t_shelter_outfile:
-        t_shelter_outfile.write(",".join(['t', 'agent_id', 'agent_origin', 'agent_cls', 'agent_dept_time', 'agent_cl_enter_time'])+"\n")
+        t_stats_outfile.write(",".join(['t', 'arr', 'shelter', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts'])+"\n")
+    # with open(scratch_dir + simulation_outputs + '/t_stats/t_shelter_{}.csv'.format(scen_nm), 'w') as t_shelter_outfile:
+    #     t_shelter_outfile.write(",".join(['t', 'agent_id', 'agent_origin', 'agent_cls', 'agent_dept_time', 'agent_cl_enter_time'])+"\n")
 
-    closed_link = []
+    closed_links = []
+    shelter_cnts = 0
     for t in range(t_s, t_e):
         move = 0
 
         ### agent model
         t_agent_0 = time.time()
-        shelter_list = []
-        a1_cnt, a2_cnt = 0, 0
+        # shelter_list = []
+        cl_agents_dict = {cl: [] for cl in closed_links}
+        # a1_cnt, a2_cnt, a3_cnt = 0, 0, 0
         for agent_id, agent in agent_id_dict.items():
             if agent.status != 'shelter':
-                a1_cnt += 1
+                # a1_cnt += 1
                 agent.find_next_link(node2link_dict=node2link_dict)
+                try:
+                    cl_agents_dict[agent.ol].append(agent_id)
+                except KeyError:
+                    pass
                 ### initial and reroute
-                if (t == 0) | (agent.ol in closed_link):
-                    a2_cnt += 1
+                # if (t == 0) | (agent.ol in closed_link):
+                if t==0:
+                    # a2_cnt += 1
                     routing_status = agent.get_path(g=g)
-                    if routing_status == 'no_route':
-                        shelter_list.append([t, agent_id, agent.origin_nid, agent.cls, agent.dept_time, agent.cl_enter_time])
+                    # if routing_status == 'no_route':
+                    #     agent.force_stop()
                 agent.load_trips(t, node2link_dict=node2link_dict, link_id_dict=link_id_dict)
+        for cl_agents in cl_agents_dict.values():
+            for agent_id in cl_agents:
+                # a3_cnt += 1
+                agent = agent_id_dict[agent_id]
+                routing_status = agent.get_path(g=g)
+                if routing_status == 'no_route':
+                    agent.force_stop()
+                    shelter_cnts += 1
         t_agent_1 = time.time()
-        for blocked_agent in shelter_list:
-            agent_id_dict[blocked_agent[1]].force_stop()
-        # with open(scratch_dir + simulation_outputs + '/t_stats/t_shelter_{}.csv'.format(scen_nm), 'a') as t_shelter_outfile:
-        #     for blocked_agent in shelter_list:
-        #         agent_id_dict[blocked_agent[0]].force_stop()
-        #         t_shelter_outfile.write(",".join([str(x) for x in blocked_agent])+"\n")
-        print(t, len(closed_link), len(shelter_list), a1_cnt, a2_cnt, t_agent_1 - t_agent_0)
-        gc.collect()
-        if t==120: sys.exit(0)
+        # print(t, len(closed_links), len(shelter_list), a1_cnt, a2_cnt, a3_cnt, t_agent_1 - t_agent_0)
+        # gc.collect()
+        # if t==1200: sys.exit(0)
 
         ### link model
         ### Each iteration in the link model is not time-consuming. So just keep using one process.
@@ -281,7 +292,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, dept_time_df=None
             link.travel_time_list = []
             if (link.type!='v') & (link_fire_dist_dict[link_id][0] < t*link_fire_dist_dict[link_id][1]): ### initial distance is smaller than t * speed
                 link.close_link_to_newcomers(g=g)
-                closed_link.append(link_id)
+                closed_links.append(link_id)
         t_link_1 = time.time()
         
         ### node model
@@ -292,7 +303,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, dept_time_df=None
             n_t_move, t_traffic_counter, agent_update_dict, link_update_dict = node.run_node_model(t, node_id_dict=node_id_dict, link_id_dict=link_id_dict, agent_id_dict=agent_id_dict, node2link_dict=node2link_dict)
             move += n_t_move
             for agent_id, agent_new_info in agent_update_dict.items():
-                [agent_id_dict[agent_id].cls, agent_id_dict[agent_id].cle, agent_id_dict[agent_id].status, agent_id_dict[agent_id].cl_enter_time] = agent_new_info
+                [agent_id_dict[agent_id].cls, agent_id_dict[agent_id].cle, agent_id_dict[agent_id].arr_status, agent_id_dict[agent_id].cl_enter_time] = agent_new_info
             for link_id, link_new_info in link_update_dict.items():
                 if len(link_new_info) == 3:
                     [link_id_dict[link_id].queue_veh, link_id_dict[link_id].ou_c, link_id_dict[link_id].travel_time_list] = link_new_info
@@ -304,22 +315,24 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, dept_time_df=None
 
         ### metrics
         if t%100 == 0:
-            arrival_cnts = np.sum([1 for a in agent_id_dict.values() if a.status=='arr'])
-            if arrival_cnts == len(agent_id_dict):
+            arrival = [agent_id for agent_id, agent in agent_id_dict.items() if agent.arr_status in ['arr']] ### shelter_arr not considered as arrival
+            # print(arrival, agent_id_dict[11274].status, agent_id_dict[11274].destin_nid, agent_id_dict[11274].cle)
+            arrival_cnts = len(arrival)
+            if arrival_cnts + shelter_cnts == len(agent_id_dict):
                 logging.info("all agents arrive at destinations")
                 break
-            veh_loc = [link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint for agent in agent_id_dict.values() if agent.status != 'arr']
+            veh_loc = [link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint for agent in agent_id_dict.values() if agent.arr_status not in ['arr', 'shelter_arr']]
             outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = outside_polygon(evacuation_zone, evacuation_buffer, veh_loc)
             avg_fire_dist = 0 # np.mean(fire_point_distance(veh_loc))
             neg_dist = cnt_veh_in_fire(t, veh_loc=veh_loc, fire_df=fire_df)
             with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm),'a') as t_stats_outfile:
-                t_stats_outfile.write(",".join([str(x) for x in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + "\n")
+                t_stats_outfile.write(",".join([str(x) for x in [t, arrival_cnts, shelter_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + "\n")
 
             ### fitness metric
             fitness += neg_dist
 
         if t%100==0: 
-            logging.info(" ".join([str(i) for i in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, round(t_agent_1-t_agent_0, 2), round(t_node_1-t_node_0, 2), round(t_link_1-t_link_0, 2)]]) + " " + str(len(veh_loc)))
+            logging.info(" ".join([str(i) for i in [t, arrival_cnts, shelter_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, round(t_agent_1-t_agent_0, 2), round(t_node_1-t_node_0, 2), round(t_link_1-t_link_0, 2)]]) + " " + str(len(veh_loc)))
 
     return fitness
 

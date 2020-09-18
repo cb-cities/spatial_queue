@@ -105,10 +105,11 @@ class Node:
 
         ### Agent reaching destination
         for [agent_id, next_node, il, ol, agent_dir] in go_vehs:
-            veh_len = agent_id_dict[agent_id].veh_len
+            agent = agent_id_dict[agent_id]
+            veh_len = agent.veh_len
             ### link traversal time if the agent can pass
             if link_id_dict[il].type == 'real':
-                travel_time = (t_now, t_now - agent_id_dict[agent_id].cl_enter_time)
+                travel_time = (t_now, t_now - agent.cl_enter_time)
             else:
                 travel_time = None ### no update of travel time for virtual links
             ### track status of inflow link in the current iteration
@@ -126,13 +127,16 @@ class Node:
                     outflow_link_run_veh, outflow_link_in_c= link_id_dict[ol].run_veh, link_id_dict[ol].in_c
 
             ### arrival
-            if (next_node is None) and (self.id == agent_id_dict[agent_id].destin_nid):
+            if (agent.status=='shelter') or (self.id == agent.destin_nid):
                 node_move += 1
                 ### before move agent as it uses the old agent.cl_enter_time
                 # link_id_dict[il].send_veh(t_now, agent_id, agent_id_dict=agent_id_dict)
                 # agent_id_dict[agent_id].move_agent(t_now, self.id, next_node, 'arr', il, ol)
                 link_update_dict[il] = [[v for v in inflow_link_queue_veh if v != agent_id], max(0, inflow_link_ou_c - 1), inflow_link_travel_time_list+[travel_time]]
-                agent_update_dict[agent_id] = [self.id, next_node, 'arr', t_now]
+                if (agent.status=='shelter'):
+                    agent_update_dict[agent_id] = [self.id, next_node, 'shelter_arr', t_now]
+                else:
+                    agent_update_dict[agent_id] = [self.id, next_node, 'arr', t_now]
             ### no storage capacity downstream
             elif link_id_dict[ol].st_c < veh_len:
                 pass ### no blocking, as # veh = # lanes
@@ -255,13 +259,14 @@ class Agent:
         ### Empty
         self.route_igraph = []
         self.find_route = None
-        self.status = None
+        self.status = 'unloaded'
+        self.arr_status = None
         self.cl_enter_time = None
         self.ol = None
         self.nle = None ### next link end
 
     def load_trips(self, t_now, node2link_dict=None, link_id_dict=None):
-        if (self.dept_time == t_now):
+        if (self.status=='unloaded') & (self.dept_time == t_now):
             initial_edge = node2link_dict[self.route_igraph[0]]
             link_id_dict[initial_edge].run_veh.append(self.id)
             self.status = 'loaded'
@@ -269,7 +274,7 @@ class Agent:
 
     def find_next_link(self, node2link_dict=None):
         
-        if self.destin_nid == self.cle: ### current node is agent destination
+        if (self.status=='shelter') or (self.destin_nid == self.cle): ### current node is agent destination
             self.ol = None
         next_link = [(start, end) for (start, end) in self.route_igraph if start == self.cle]
         if next_link == []: ### before a route is assigned
@@ -280,7 +285,7 @@ class Agent:
 
     def prepare_agent(self, node_id, node2link_dict=None, node_id_dict=None):
         assert self.cle == node_id, "agent next node {} is not the transferring node {}, route {}".format(self.cle, node_id, self.route_igraph)
-        if self.destin_nid == self.cle: ### current node is agent destination
+        if (self.status=='shelter') or (self.destin_nid == self.cle): ### current node is agent destination
             return None, None, 0
         x_start, y_start = node_id_dict[self.cls].lon, node_id_dict[self.cls].lat
         x_mid, y_mid = node_id_dict[node_id].lon, node_id_dict[node_id].lat
@@ -310,7 +315,7 @@ class Agent:
             return 'find_route'
 
     def force_stop(self):
-        self.destin_nid = self.cle
+        # self.destin_nid = self.cle
         self.route_igraph = [(self.cls, self.cle)]
         self.status = 'shelter'
         self.ol = None
