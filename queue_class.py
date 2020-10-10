@@ -145,6 +145,7 @@ class Node:
                 except KeyError:
                     print(lane, go_link.link_id, go_link.queue_vehicles, agent_id)
                     print(agent_id_dict[agent_id].route, agent_incoming_link, agent_outgoing_link, self.incoming_links)
+                    print(agent_id_dict[agent_id].current_link_start_nid, agent_id_dict[agent_id].current_link_end_nid, agent_id_dict[agent_id].next_link_end_nid)
                 if turning_angle>=50: left_turn_phase=True
         # the chosen vehicle decides it is left turn phase
         if left_turn_phase: return non_conflict_go_vehicles
@@ -187,7 +188,7 @@ class Node:
         for ol_id in all_outgoing_links:
             try:
                 ol = link_id_dict[ol_id]
-                link_update_dict[ol_id] = ['outflow', ol.queue_vehicles, ol.remaining_outflow_capacity, ol.travel_time_list]
+                link_update_dict[ol_id] = ['outflow', ol.run_vehicles, ol.remaining_inflow_capacity, ol.remaining_storage_capacity]
             except KeyError: ### ol_id is None
                 pass
 
@@ -196,14 +197,8 @@ class Node:
             #     # pass
             #     print('1627')
             agent = agent_id_dict[agent_id]
-            # agent_il = link_id_dict[agent_il_id]
-            # if agent_ol_id is None: agent_ol = None
-            # else: agent_ol = link_id_dict[agent_ol_id]
             ### link traversal time if the agent can pass
-            if agent_il.link_type == 'real':
-                travel_time = (t_now, t_now - agent.current_link_enter_time)
-            else:
-                travel_time = None ### no update of travel time for virtual links
+            travel_time = (t_now, t_now - agent.current_link_enter_time)
             ### track status of inflow link in the current iteration
             [_, inflow_link_queue_veh, inflow_link_ou_c, inflow_link_travel_time_list] = link_update_dict[agent_il_id]
             ### track status of outflow link in the current iteration
@@ -213,16 +208,16 @@ class Node:
                 pass
 
             ### arrival
-            if (agent.status=='shelter') or (self.node_id == agent.destin_nid):
+            if self.node_id in [agent.destin_nid, agent.furthest_nid]:
                 node_move += 1
                 node_move_link_pairs.append((agent_il_id, agent_ol_id))
                 ### before move agent as it uses the old agent.cl_enter_time
                 link_update_dict[agent_il_id] = [
                     'inflow', [v for v in inflow_link_queue_veh if v != agent_id], max(0, inflow_link_ou_c - 1), inflow_link_travel_time_list+[travel_time]]
                 if (agent.status=='shelter'):
-                    agent_update_dict[agent_id] = [self.node_id, None, 'shelter_arrive', t_now]
+                    agent_update_dict[agent_id] = ['shelter_arrive', self.node_id, None, t_now]
                 else:
-                    agent_update_dict[agent_id] = [self.node_id, None, 'arrive', t_now]
+                    agent_update_dict[agent_id] = ['arrive', self.node_id, None, t_now]
             ### no storage capacity downstream
             elif outflow_link_st_c < agent.vehicle_length:
                 pass ### no blocking, as # veh = # lanes
@@ -235,7 +230,7 @@ class Node:
                     'inflow', [v for v in inflow_link_queue_veh if v != agent_id], max(0, inflow_link_ou_c - 1), inflow_link_travel_time_list+[travel_time]]
                 link_update_dict[agent_ol_id] = [
                     'outflow', outflow_link_run_veh + [agent_id], max(0, outflow_link_in_c - 1), outflow_link_st_c-agent.vehicle_length]
-                agent_update_dict[agent_id] = [self.node_id, agent.next_link_end_nid, 'enroute', t_now]
+                agent_update_dict[agent_id] = ['enroute', self.node_id, agent.next_link_end_nid, t_now]
             ### either inlink-sending or outlink-receiving or both exhaust
             else:
                 control_cap = min(inflow_link_ou_c, outflow_link_in_c)
@@ -248,7 +243,7 @@ class Node:
                         'inflow', [v for v in inflow_link_queue_veh if v != agent_id], max(0, inflow_link_ou_c - 1), inflow_link_travel_time_list+[travel_time]]
                     link_update_dict[agent_ol_id] = [
                         'outflow', outflow_link_run_veh + [agent_id], max(0, outflow_link_in_c - 1), outflow_link_st_c-agent.vehicle_length]
-                    agent_update_dict[agent_id] = [self.node_id, agent.next_link_end_nid, 'enroute', t_now]
+                    agent_update_dict[agent_id] = ['enroute', self.node_id, agent.next_link_end_nid, t_now]
                 else: ### even though vehicle cannot move, the remaining capacity needs to be adjusted
                     if inflow_link_ou_c < outflow_link_in_c: 
                         link_update_dict[agent_il_id] = [ 
@@ -295,6 +290,7 @@ class Link:
         self.end_node = None
         self.status = 'open'
 
+    # @profile
     def run_link_model(self, t_now, agent_id_dict=None):
         for agent_id in self.run_vehicles:
             if agent_id_dict[agent_id].current_link_enter_time < t_now - self.fft:
@@ -303,7 +299,7 @@ class Link:
         # if self.link_id == 'n8205_vl':
         #     print('link', self.start_nid, self.end_nid, self.run_vehicles, self.queue_vehicles, '\n')
         ### remaining spaces on link for the node model to move vehicles to this link
-        self.remaining_storage_capacity = self.storage_capacity - np.sum([agent_id_dict[agent_id].vehicle_length for agent_id in self.run_vehicles+self.queue_vehicles])
+        self.remaining_storage_capacity = self.storage_capacity - sum([agent_id_dict[agent_id].vehicle_length for agent_id in self.run_vehicles+self.queue_vehicles])
         self.remaining_inflow_capacity, self.remaining_outflow_capacity = self.capacity/3600, self.capacity/3600
         if self.status=='closed': self.remaining_inflow_capacity = 0
     
@@ -332,7 +328,7 @@ class Agent:
         self.current_link_start_nid = 'vn{}'.format(self.origin_nid) # current link start node
         self.current_link_end_nid = self.origin_nid # current link end node
         ### Empty
-        self.route = None ### None or list of route
+        self.route = {} ### None or list of route
         self.status = 'unloaded' ### unloaded, enroute, shelter, shelter_arrive, arrive
         self.current_link_enter_time = None
         self.next_link = None
@@ -343,63 +339,39 @@ class Agent:
         sp_dist = sp.distance(self.destin_nid)
         if sp_dist > 1e8:
             sp.clear()
-            self.route = {self.current_link_start_nid: self.current_link_end_nid}
+            # self.route = {self.current_link_start_nid: self.current_link_end_nid}
+            self.route = {}
             self.furthest_nid = self.current_link_end_nid
             self.status = 'shelter'
         else:
             sp_route = sp.route(self.destin_nid)
             ### create a path. Order only preserved in Python 3.7+. Do not rely on.
-            self.route = {self.current_link_start_nid: self.current_link_end_nid}
+            # self.route = {self.current_link_start_nid: self.current_link_end_nid}
             for (start_nid, end_nid) in sp_route:
                 self.route[start_nid] = end_nid
             sp.clear()
+            if self.agent_id == 13762:
+                print('route', self.current_link_start_nid, self.current_link_end_nid, self.route)
 
-    def find_next_link(self, t_now, node2link_dict=None, link_id_dict=None):
+    def load_vehicle(self, t_now, node2link_dict=None, link_id_dict=None):
         ### for unloaded agents
         if (self.status=='unloaded'):
             if (self.deptarture_time == t_now):
-                initial_edge = node2link_dict[(self.current_link_start_nid, self.route[self.current_link_start_nid])]
-                link_id_dict[initial_edge].run_vehicles.append(self.agent_id)
+                self.this_link = node2link_dict[ (self.current_link_start_nid, self.current_link_end_nid) ]
+                link_id_dict[self.this_link].run_vehicles.append(self.agent_id)
                 self.status = 'enroute'
                 self.current_link_enter_time = t_now
                 self.next_link_end_nid = self.route[self.current_link_end_nid]
                 self.next_link = node2link_dict[ (self.current_link_end_nid, self.next_link_end_nid) ]
-        ### for agents that have to stop
-        elif self.current_link_end_nid in [self.destin_nid, self.furthest_nid]:
-            self.next_link_end_nid = None
-            self.next_link = None
-        ### for other agents
-        elif (self.status=='enroute'):
+
+    def find_next_link(self, t_now, node2link_dict=None):
+        ### for enroute vehicles
+        # self.current_link_end_nid = self.route[self.current_link_start_nid]
+        self.this_link = node2link_dict[ (self.current_link_start_nid, self.current_link_end_nid) ]
+        try:
             self.next_link_end_nid = self.route[self.current_link_end_nid]
             self.next_link = node2link_dict[ (self.current_link_end_nid, self.next_link_end_nid) ]
-        else:
-            pass
-        # if self.agent_id == 1627:
-        #     print(self.current_link_start_nid, self.current_link_end_nid, self.next_link_end_nid, self.next_link)
-        #     print(link_id_dict[19743].start_nid, link_id_dict[19743].end_nid, link_id_dict[19743].run_vehicles, link_id_dict[19743].queue_vehicles)
-        #     print(link_id_dict['n8205_vl'].start_nid, link_id_dict['n8205_vl'].end_nid, link_id_dict['n8205_vl'].run_vehicles, link_id_dict['n8205_vl'].queue_vehicles)
-
-    # def prepare_agent(self, node_id, node2link_dict=None, node_id_dict=None):
-    #     assert self.current_link_end_nid == node_id, "agent next node {} is not the transferring node {}, route {}".format(self.current_link_end_nid, node_id, self.route)
-    #     if self.next_link is None: ### current node is agent destination
-    #         return 0
-    #     x_start, y_start = node_id_dict[self.current_link_start_nid].lon, node_id_dict[self.current_link_start_nid].lat
-    #     x_mid, y_mid = node_id_dict[node_id].lon, node_id_dict[node_id].lat
-    #     x_end, y_end = node_id_dict[self.next_link_end_nid].lon, node_id_dict[self.next_link_end_nid].lat
-    #     in_vec, out_vec = (x_mid-x_start, y_mid-y_start), (x_end-x_mid, y_end-y_mid)
-    #     dot, det = (in_vec[0]*out_vec[0] + in_vec[1]*out_vec[1]), (in_vec[0]*out_vec[1] - in_vec[1]*out_vec[0])
-    #     agent_direction = np.arctan2(det, dot)*180/np.pi 
-    #     return agent_direction
-    
-    # def move_agent(self, t_now, new_cls, new_cle, new_status, il, ol):
-    #     self.cls = new_cls
-    #     self.cle = new_cle
-    #     self.status = new_status
-    #     self.cl_enter_time = t_now
-
-    # def force_stop(self):
-    #     # self.destin_nid = self.cle
-    #     self.route_igraph = [(self.cls, self.cle)]
-    #     self.status = 'shelter'
-    #     self.ol = None
-    #     self.nle = None
+        except KeyError:
+            self.next_link_end_nid = None
+            self.next_link = None
+        
