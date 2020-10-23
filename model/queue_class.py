@@ -7,14 +7,17 @@ import random
 import logging 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 from ctypes import c_double
+import scipy.spatial.distance
 from shapely.wkt import loads
+from shapely.geometry import Point
 # for coordinate transformation
 from shapely.ops import transform
 import pyproj
 geo2prj = pyproj.Transformer.from_proj(pyproj.Proj('epsg:4326'), pyproj.Proj('epsg:3857'), always_xy=True)
 ### dir
-home_dir = '.' # os.environ['HOME']+'/spatial_queue'
+home_dir = '/home/bingyu/Documents/spatial_queue' # os.environ['HOME']+'/spatial_queue'
 ### user
 sys.path.insert(0, home_dir+'/..')
 from sp import interface
@@ -33,10 +36,14 @@ class Network:
         
         # nodes
         nodes_df = pd.read_csv(home_dir + network_file_nodes)
+        nodes_df = gpd.GeoDataFrame(nodes_df, crs='epsg:4326', geometry=[Point(x, y) for (x, y) in zip(nodes_df.lon, nodes_df.lat)]).to_crs('epsg:26910')
+        nodes_df['x'] = nodes_df['geometry'].apply(lambda x: x.x)
+        nodes_df['y'] = nodes_df['geometry'].apply(lambda x: x.y)
         # edges
         links_df = pd.read_csv(home_dir + network_file_edges)
         links_df['fft'] = links_df['length']/links_df['maxmph']*2.237
         links_df['capacity'] = 1900*links_df['lanes']
+        links_df = gpd.GeoDataFrame(links_df, crs='epsg:4326', geometry=links_df['geometry'].map(loads)).to_crs('epsg:26910')
         links_df = links_df[['eid', 'nid_s', 'nid_e', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
         # links_df0.to_csv(scratch_dir + simulation_outputs + '/modified_network_edges.csv', index=False)
         
@@ -45,7 +52,7 @@ class Network:
 
         ### Create link and node objects
         for row in nodes_df.itertuples():
-            real_node = Node(getattr(row, 'nid'), getattr(row, 'lon'), getattr(row, 'lat'), 'real', getattr(row, 'osmid'))
+            real_node = Node(getattr(row, 'nid'), getattr(row, 'x'), getattr(row, 'y'), 'real', getattr(row, 'osmid'))
             virtual_node = real_node.create_virtual_node()
             virtual_link = real_node.create_virtual_link()
             self.nodes[real_node.node_id] = real_node
@@ -78,7 +85,7 @@ class Network:
                     turning_angle = turning_angle/np.pi*180
                     node.incoming_links[incoming_link][outgoing_link] = turning_angle
     
-    def add_demand(self, demand_files=None, dept_time_col=None, phase_tdiff=None, reroute_pct=None, tow_pct=0):
+    def add_demand(self, demand_files=None, dept_time_col=None, phase_tdiff=None, reroute_pct=0, tow_pct=0):
         all_od_list = []
         for demand_file in demand_files:
             od = pd.read_csv(home_dir + demand_file)
@@ -102,10 +109,10 @@ class Network:
             self.agents[getattr(row, 'agent_id')] = Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len'), getattr(row, 'gps_reroute')) 
 
 class Node:
-    def __init__(self, node_id, lon, lat, node_type, osmid=None):
+    def __init__(self, node_id, x, y, node_type, osmid=None):
         self.node_id = node_id
-        self.lon = lon
-        self.lat = lat
+        self.x = x
+        self.y = y
         self.node_type = node_type
         self.osmid = osmid
         ### derived
@@ -116,10 +123,10 @@ class Node:
         self.status = None
 
     def create_virtual_node(self):
-        return Node('vn{}'.format(self.node_id), self.lon+0.001, self.lat+0.001, 'v')
+        return Node('vn{}'.format(self.node_id), self.x+1, self.y+1, 'v')
 
     def create_virtual_link(self):
-        return Link('n{}_vl'.format(self.node_id), 100, 0, 0, 100000, 'v', 'vn{}'.format(self.node_id), self.node_id, 'LINESTRING({} {}, {} {})'.format(self.lon+0.001, self.lat+0.001, self.lon, self.lat))
+        return Link('n{}_vl'.format(self.node_id), 100, 0, 0, 100000, 'v', 'vn{}'.format(self.node_id), self.node_id, loads('LINESTRING({} {}, {} {})'.format(self.x+1, self.y+1, self.x, self.y)))
     
     def non_conflict_vehicles(self, link_id_dict=None, agent_id_dict=None, node2link_dict=None):
         non_conflict_go_vehicles = []
@@ -269,7 +276,7 @@ class Link:
         self.link_type = link_type
         self.start_nid = start_nid
         self.end_nid = end_nid
-        self.geometry = loads(geometry)
+        self.geometry = geometry
         ### derived
         self.storage_capacity = max(18, length*lanes) ### at least allow any vehicle to pass. i.e., the road won't block any vehicle because of the road length
         self.remaining_inflow_capacity = self.capacity/3600.0 # capacity in veh/s
@@ -277,10 +284,10 @@ class Link:
         self.remaining_storage_capacity = self.storage_capacity # remaining storage capacity
         self.midpoint = list(self.geometry.interpolate(0.5, normalized=True).coords)[0]
         # angle
-        geometry_3857 = transform(geo2prj.transform, self.geometry)
-        node1 = geometry_3857.interpolate(0, normalized=True)
-        node2 = geometry_3857.interpolate(0.1, normalized=True)
-        self.angle = np.arctan2(node2.y - node1.y, node2.x - node1.x)
+        # geometry_3857 = transform(geo2prj.transform, self.geometry)
+        (node_1x, node_1y) = self.geometry.coords[0]
+        node2 = self.geometry.interpolate(0.1, normalized=True)
+        self.angle = np.arctan2(node2.y - node_1y, node2.x - node_1x)
         ### empty
         self.queue_vehicles = [] # [(agent, t_enter), (agent, t_enter), ...]
         self.run_vehicles = []
@@ -288,7 +295,11 @@ class Link:
         self.travel_time = fft
         self.start_node = None
         self.end_node = None
+        ### fire related
         self.status = 'open'
+        self.burnt = None
+        self.fire_time = None
+        self.fire_type = None
 
     # @profile
     def run_link_model(self, t_now, agent_id_dict=None):
@@ -350,8 +361,6 @@ class Agent:
             for (start_nid, end_nid) in sp_route:
                 self.route[start_nid] = end_nid
             sp.clear()
-            if self.agent_id == 13762:
-                print('route', self.current_link_start_nid, self.current_link_end_nid, self.route)
 
     def load_vehicle(self, t_now, node2link_dict=None, link_id_dict=None):
         ### for unloaded agents
