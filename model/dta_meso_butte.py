@@ -9,15 +9,12 @@ import logging
 import warnings
 import numpy as np
 import pandas as pd 
-from ctypes import c_double
+import rasterio as rio
 import scipy.io as sio
 import geopandas as gpd
+from ctypes import c_double
 from shapely.wkt import loads
 from shapely.geometry import Point
-import scipy.sparse as ssparse
-import multiprocessing
-from multiprocessing import Pool
-from scipy.stats import truncnorm
 import scipy.spatial.distance
 ### dir
 home_dir = '/home/bingyu/Documents/spatial_queue' # os.environ['HOME']+'/spatial_queue'
@@ -89,7 +86,15 @@ def outside_polygon(evacuation_zone, evacuation_buffer, vehicle_locations):
     evacuation_buffer_dist = haversine.point_to_vertex_dist(vehicle_array, evacuation_buffer)
     return np.sum(evacuation_zone_dist>0), np.sum(evacuation_buffer_dist>0)
 
-def link_model(t, network):
+def link_model(t, network, links_raster):
+    # if (t>=75*60) and (t%300 == 0) and (t<=195*60):
+    if (t%300==0) and (t<=340*60):
+        fire_array = rio.open(work_dir + '/projects/butte_osmnx/demand_inputs/fire_cawfe/cawfe_fire_{}.tif'.format(int(t//60)+105)).read(1)
+        links_in_fire = np.where(fire_array==0, 0, links_raster)
+        links_in_fire = np.unique([links_in_fire.tolist()])
+        # print(links_in_fire)
+    else:
+        links_in_fire = []
     for link_id, link in network.links.items(): 
         link.run_link_model(t, agent_id_dict=network.agents)
         if link.link_type == 'v': ### do not track the link time of virtual links
@@ -98,7 +103,7 @@ def link_model(t, network):
             link.travel_time_list = []
         # link.update_travel_time(self, t_now, link_time_lookback_freq=None, g=None, update_graph=False)
         if link.fire_time == t:
-            if (link.fire_type in ['ember', 'initial']) and (random.uniform(0, 1) < 0.1):
+            if (link.fire_type in ['ember', 'initial']) and (link.burnt == 'not_yet') and (random.uniform(0, 1) < 1.01):
                 link.close_link_to_newcomers(g=network.g)
                 link.burnt = 'burnt'
             elif (link.fire_type in ['pentz', 'neal', 'clark']):
@@ -106,6 +111,10 @@ def link_model(t, network):
                 link.burnt = 'burnt'
             else:
                 link.burnt = 'not_burnt'
+        # raster fire intersection
+        if (link.link_id in links_in_fire)and (link.burnt == 'not_yet'):
+            link.close_link_to_newcomers(g=network.g)
+            link.burnt = 'burnt'
     return network
 
 def node_model(t, network, move, check_traffic_flow_links_dict):
@@ -143,7 +152,7 @@ def node_model(t, network, move, check_traffic_flow_links_dict):
         
     return network, move, check_traffic_flow_links_dict
 
-def one_step(t, network, evacuation_zone, evacuation_buffer, fire_df, check_traffic_flow_links, scen_nm, simulation_outputs):
+def one_step(t, network, links_raster, evacuation_zone, evacuation_buffer, fire_df, check_traffic_flow_links, scen_nm, simulation_outputs):
     move = 0
     step_fitness = None
     ### agent model
@@ -161,7 +170,7 @@ def one_step(t, network, evacuation_zone, evacuation_buffer, fire_df, check_traf
     ### link model
     ### Each iteration in the link model is not time-consuming. So just keep using one process.
     t_link_0 = time.time()
-    network = link_model(t, network)
+    network = link_model(t, network, links_raster)
     t_link_1 = time.time()
     
     ### node model
@@ -194,10 +203,11 @@ def one_step(t, network, evacuation_zone, evacuation_buffer, fire_df, check_traf
         step_fitness = neg_dist
     
     ### stepped outputs
-    if t%1200==0:
+    if t%120==0:
         link_output = pd.DataFrame(
-            [(link.link_id, len(link.queue_vehicles), len(link.run_vehicles), round(link.travel_time, 2)) for link in network.links.values() if link.link_type=='real'], columns=['link_id', 'q', 'r', 't'])
+            [(link.link_id, len(link.queue_vehicles), len(link.run_vehicles), round(link.travel_time, 2)) for link in network.links.values() if (link.link_type=='real') and (len(link.queue_vehicles)+len(link.run_vehicles)>0)], columns=['link_id', 'q', 'r', 't'])
         link_output.to_csv(scratch_dir + simulation_outputs + '/link_stats/link_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
+    if t%1200==0:    
         node_agent_cnts = pd.DataFrame(
             [(agent.current_link_end_nid, agent.status, 1) for agent in network.agents.values()], columns=['node_id', 'status', 'cnt']).groupby(['node_id', 'status']).agg({'cnt': np.sum}).reset_index()
         node_agent_cnts.to_csv(scratch_dir + simulation_outputs + '/node_stats/node_agent_cnts_{}_t{}.csv'.format(scen_nm, t), index=False)
@@ -215,12 +225,13 @@ def preparation(random_seed=None, dept_time_col=None, contraflow=False):
     link_time_lookback_freq = 20 ### sec
     network_file_edges = '/projects/butte_osmnx/network_inputs/butte_edges_sim.csv'
     network_file_nodes = '/projects/butte_osmnx/network_inputs/butte_nodes_sim.csv'
+    network_file_edges_raster = '/projects/butte_osmnx/network_inputs/butte_edges_sim.tif'
     demand_files = ["/projects/butte_osmnx/demand_inputs/od.csv"]
     simulation_outputs = '' ### scratch_folder
     if contraflow: cf_files = []
     else: cf_files = []
 
-    scen_nm = "full_dict_c0.1_d1"
+    scen_nm = "cawfe_1"
     print(scen_nm)
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO, force=True)
     logging.info(scen_nm)
@@ -230,6 +241,7 @@ def preparation(random_seed=None, dept_time_col=None, contraflow=False):
     network = Network()
     network.dataframe_to_network(network_file_edges = network_file_edges, network_file_nodes = network_file_nodes)
     network.add_connectivity()
+    links_raster = rio.open(work_dir + network_file_edges_raster).read(1)
 
     ### demand
     network.add_demand(dept_time_col=dept_time_col, demand_files = demand_files)
@@ -250,17 +262,9 @@ def preparation(random_seed=None, dept_time_col=None, contraflow=False):
     fire_df['x'] = fire_df['geometry'].apply(lambda x: x.x)
     fire_df['y'] = fire_df['geometry'].apply(lambda x: x.y)
     fire_df.to_csv(scratch_dir + simulation_outputs + '/fire/fire_init_{}.csv'.format(scen_nm), index=False)
-
     ### fire arrival time
     road_closure_time(network.links, fire_df)
-    # pd.DataFrame([[link_id, link_fire_dist[0], link_fire_dist[1], link_fire_dist[2], network.links[link_id].geometry] for link_id, link_fire_dist in link_fire_time_dict.items()], columns=['link_id', 'link_fire_dist', 'fire_arrival_time', 'fire_type', 'geometry']).to_csv(scratch_dir + simulation_outputs + '/fire/road_fire_dist_{}.csv'.format(scen_nm), index=False)
-    # # sys.exit(0)
-    # link_fire_time_df = pd.read_csv(scratch_dir + simulation_outputs + '/fire/road_fire_dist_{}.csv'.format(scen_nm))
-    # link_fire_time_dict = {}
-    # for row in link_fire_time_df.itertuples():
-    #     link_id = getattr(row, 'link_id')
-    #     link_fire_time_dict[link_id] = [getattr(row, 'link_fire_dist'), getattr(row, 'fire_arrival_time'), getattr(row, 'fire_type')]
-    # print(link_fire_time_dict[link_id])
+    ### additional fire spread information will be considered later
     
     ### time step output
     with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
@@ -271,7 +275,7 @@ def preparation(random_seed=None, dept_time_col=None, contraflow=False):
         scen_nm), 'w') as transfer_stats_outfile:
         transfer_stats_outfile.write("t,"+",".join(['{}-{}'.format(il, ol) for (il, ol) in check_traffic_flow_links])+"\n")
 
-    return network, evacuation_zone, evacuation_buffer, fire_df, check_traffic_flow_links, scen_nm, simulation_outputs
+    return network, links_raster, evacuation_zone, evacuation_buffer, fire_df, check_traffic_flow_links, scen_nm, simulation_outputs
 
 # def main(random_seed=None, dept_time_col=None):
     
@@ -286,21 +290,6 @@ def preparation(random_seed=None, dept_time_col=None, contraflow=False):
     
 #     return fitness
 
-def test(contraflow=False):
-    reroute_freq = 10 ### sec
-    link_time_lookback_freq = 20 ### sec
-    network_file_edges = 'projects/butte_osmnx/network_inputs/butte_edges_sim.csv'
-    network_file_nodes = 'projects/butte_osmnx/network_inputs/butte_nodes_sim.csv'
-    demand_files = ["projects/butte_osmnx/demand_inputs/od.csv"]
-    simulation_outputs = '' ### scratch_folder
-    if contraflow: cf_files = []
-    else: cf_files = []
-
-    scen_nm = "full_dict_c0.1_d1"
-    print(scen_nm)
-    print('test')
-
 ### python3 -c 'import dta_meso_butte; dta_meso_butte.main(random_seed=0, dept_time_id="imm", reroute_pct=0, phase_tdiff=0, counterflow=0)'
 # if __name__ == "__main__":
-
 #     main(random_seed=0, dept_time_col='dept_time_scen_1')

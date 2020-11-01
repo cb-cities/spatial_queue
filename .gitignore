@@ -10,4 +10,5 @@
 !*.md
 
 # Ignore
+example
 *.ipynb_checkpoints*
