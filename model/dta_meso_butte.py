@@ -86,35 +86,39 @@ def outside_polygon(evacuation_zone, evacuation_buffer, vehicle_locations):
     evacuation_buffer_dist = haversine.point_to_vertex_dist(vehicle_array, evacuation_buffer)
     return np.sum(evacuation_zone_dist>0), np.sum(evacuation_buffer_dist>0)
 
-def link_model(t, network, links_raster):
+def link_model(t, network, links_raster, reroute_freq):
     # if (t>=75*60) and (t%300 == 0) and (t<=195*60):
-    if (t%300==0) and (t<=340*60):
-        fire_array = rio.open(work_dir + '/projects/butte_osmnx/demand_inputs/fire_cawfe/cawfe_fire_{}.tif'.format(int(t//60)+105)).read(1)
-        links_in_fire = np.where(fire_array==0, 0, links_raster)
-        links_in_fire = np.unique([links_in_fire.tolist()])
-        # print(links_in_fire)
-    else:
-        links_in_fire = []
+    # if (t%300==0) and (t<=340*60):
+    #     fire_array = rio.open(work_dir + '/projects/butte_osmnx/demand_inputs/fire_cawfe/cawfe_fire_{}.tif'.format(int(t//60)+105)).read(1)
+    #     links_in_fire = np.where(fire_array==0, 0, links_raster)
+    #     links_in_fire = np.unique([links_in_fire.tolist()])
+    #     # print(links_in_fire)
+    # else:
+    #     links_in_fire = []
+    
     for link_id, link in network.links.items(): 
         link.run_link_model(t, agent_id_dict=network.agents)
         if link.link_type == 'v': ### do not track the link time of virtual links
             link.travel_time_list = []
+            pass
         else:
             link.travel_time_list = []
-        # link.update_travel_time(self, t_now, link_time_lookback_freq=None, g=None, update_graph=False)
-        if link.fire_time == t:
-            if (link.fire_type in ['ember', 'initial']) and (link.burnt == 'not_yet') and (random.uniform(0, 1) < 1.01):
-                link.close_link_to_newcomers(g=network.g)
-                link.burnt = 'burnt'
-            elif (link.fire_type in ['pentz', 'neal', 'clark']):
-                link.close_link_to_newcomers(g=network.g)
-                link.burnt = 'burnt'
-            else:
-                link.burnt = 'not_burnt'
-        # raster fire intersection
-        if (link.link_id in links_in_fire)and (link.burnt == 'not_yet'):
-            link.close_link_to_newcomers(g=network.g)
-            link.burnt = 'burnt'
+            # link.update_travel_time(self, t_now, link_time_lookback_freq=None, g=None, update_graph=False)
+            if t%reroute_freq==0: link.update_travel_time_by_queue_length(network.g, len(link.queue_vehicles))
+        
+        # if link.fire_time == t:
+        #     if (link.fire_type in ['ember', 'initial']) and (link.burnt == 'not_yet') and (random.uniform(0, 1) < 1.01):
+        #         link.close_link_to_newcomers(g=network.g)
+        #         link.burnt = 'burnt'
+        #     elif (link.fire_type in ['pentz', 'neal', 'clark']):
+        #         link.close_link_to_newcomers(g=network.g)
+        #         link.burnt = 'burnt'
+        #     else:
+        #         link.burnt = 'not_burnt'
+        # # raster fire intersection
+        # if (link.link_id in links_in_fire)and (link.burnt == 'not_yet'):
+        #     link.close_link_to_newcomers(g=network.g)
+        #     link.burnt = 'burnt'
     return network
 
 def node_model(t, network, move, check_traffic_flow_links_dict):
@@ -152,14 +156,14 @@ def node_model(t, network, move, check_traffic_flow_links_dict):
         
     return network, move, check_traffic_flow_links_dict
 
-def one_step(t, network, links_raster, evacuation_zone, evacuation_buffer, fire_df, check_traffic_flow_links, scen_nm, simulation_outputs):
+def one_step(t, network, links_raster, evacuation_zone, evacuation_buffer, fire_df, check_traffic_flow_links, scen_nm, simulation_outputs, reroute_freq=None):
     move = 0
     step_fitness = None
     ### agent model
     t_agent_0 = time.time()
     for agent_id, agent in network.agents.items():
         # initial route 
-        if t==0: routing_status = agent.get_path(g=network.g)
+        if (t==0) or (t%reroute_freq==0): routing_status = agent.get_path(g=network.g)
         agent.load_vehicle(t, node2link_dict=network.node2link_dict, link_id_dict=network.links)
         # reroute upon closure
         if (agent.next_link is not None) and (network.links[agent.next_link].status=='closed'):
@@ -170,7 +174,7 @@ def one_step(t, network, links_raster, evacuation_zone, evacuation_buffer, fire_
     ### link model
     ### Each iteration in the link model is not time-consuming. So just keep using one process.
     t_link_0 = time.time()
-    network = link_model(t, network, links_raster)
+    network = link_model(t, network, links_raster, reroute_freq)
     t_link_1 = time.time()
     
     ### node model
@@ -218,21 +222,19 @@ def one_step(t, network, links_raster, evacuation_zone, evacuation_buffer, fire_
         logging.info(" ".join([str(i) for i in [t, arrival_cnts, shelter_cnts, move, '|', len(burnt_links), len(closed_links), '|', round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, round(t_agent_1-t_agent_0, 2), round(t_node_1-t_node_0, 2), round(t_link_1-t_link_0, 2)]]) + " " + str(len(veh_loc)))
     return step_fitness, network
 
-def preparation(random_seed=None, dept_time_col=None, contraflow=False):
+def preparation(random_seed=None, vphh_id=None, dept_id=None, clos_id=None, contra_id=None, rout_id=None, scen_nm=None):
     ### logging and global variables
 
-    reroute_freq = 10 ### sec
-    link_time_lookback_freq = 20 ### sec
     network_file_edges = '/projects/butte_osmnx/network_inputs/butte_edges_sim.csv'
     network_file_nodes = '/projects/butte_osmnx/network_inputs/butte_nodes_sim.csv'
     network_file_edges_raster = '/projects/butte_osmnx/network_inputs/butte_edges_sim.tif'
-    demand_files = ["/projects/butte_osmnx/demand_inputs/od.csv"]
+    demand_files = ["/projects/butte_osmnx/demand_inputs/od_vphh{}_dept{}.csv".format(vphh_id, dept_id)]
     simulation_outputs = '' ### scratch_folder
-    if contraflow: cf_files = []
+    if contra_id=='0': cf_files = []
     else: cf_files = []
 
-    scen_nm = "cawfe_1"
-    print(scen_nm)
+    scen_nm = scen_nm
+    print('scenario ', scen_nm)
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO, force=True)
     logging.info(scen_nm)
     print('log file created')
@@ -242,9 +244,11 @@ def preparation(random_seed=None, dept_time_col=None, contraflow=False):
     network.dataframe_to_network(network_file_edges = network_file_edges, network_file_nodes = network_file_nodes)
     network.add_connectivity()
     links_raster = rio.open(work_dir + network_file_edges_raster).read(1)
+    ### traffic signal
+    network.links[21671].capacity /= 2
 
     ### demand
-    network.add_demand(dept_time_col=dept_time_col, demand_files = demand_files)
+    network.add_demand(demand_files = demand_files)
     logging.info('total numbers of agents taken {}'.format(len(network.agents.keys())))
 
     ### evacuation zone
@@ -275,7 +279,7 @@ def preparation(random_seed=None, dept_time_col=None, contraflow=False):
         scen_nm), 'w') as transfer_stats_outfile:
         transfer_stats_outfile.write("t,"+",".join(['{}-{}'.format(il, ol) for (il, ol) in check_traffic_flow_links])+"\n")
 
-    return network, links_raster, evacuation_zone, evacuation_buffer, fire_df, check_traffic_flow_links, scen_nm, simulation_outputs
+    return {'network': network, 'links_raster': links_raster, 'evacuation_zone': evacuation_zone, 'evacuation_buffer': evacuation_buffer, 'fire_df': fire_df, 'check_traffic_flow_links': check_traffic_flow_links, 'scen_nm': scen_nm, 'simulation_outputs': simulation_outputs, 'rerout_freq': reroute_freq}
 
 # def main(random_seed=None, dept_time_col=None):
     

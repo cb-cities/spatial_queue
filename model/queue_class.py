@@ -85,7 +85,7 @@ class Network:
                     turning_angle = turning_angle/np.pi*180
                     node.incoming_links[incoming_link][outgoing_link] = turning_angle
     
-    def add_demand(self, demand_files=None, dept_time_col=None, phase_tdiff=None, reroute_pct=0, tow_pct=0):
+    def add_demand(self, demand_files=None, reroute_pct=0, tow_pct=0):
         all_od_list = []
         for demand_file in demand_files:
             od = pd.read_csv(home_dir + demand_file)
@@ -94,8 +94,6 @@ class Network:
             od['destin_nid'] = od['destin_osmid'].apply(lambda x: self.nodes_osmid_dict[x])
             ### assign agent id
             if 'agent_id' not in od.columns: od['agent_id'] = np.arange(od.shape[0])
-            ### assign departure time. dept_time_std == 0 --> everyone leaves at the same time
-            od['dept_time'] = od[dept_time_col]
             ### assign vehicle length
             od['veh_len'] = np.random.choice([8, 18], size=od.shape[0], p=[1-tow_pct, tow_pct])
             ### assign rerouting choice
@@ -319,6 +317,9 @@ class Link:
         if len(self.travel_time_list) > 0:
             self.travel_time = np.mean([dururation for (_, dururation) in self.travel_time_list])
             if update_graph: g.update_edge(self.start_nid, self.end_nid, c_double(self.travel_time))
+    def update_travel_time_by_queue_length(self, g, queue_length):
+        estimated_travel_time = queue_length/self.capacity * 3600 + self.fft
+        g.update_edge(self.start_nid, self.end_nid, c_double(estimated_travel_time))
 
     def close_link_to_newcomers(self, g=None):
         g.update_edge(self.start_nid, self.end_nid, c_double(1e8))
