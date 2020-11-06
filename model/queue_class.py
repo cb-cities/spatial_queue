@@ -317,7 +317,9 @@ class Link:
         if len(self.travel_time_list) > 0:
             self.travel_time = np.mean([dururation for (_, dururation) in self.travel_time_list])
             if update_graph: g.update_edge(self.start_nid, self.end_nid, c_double(self.travel_time))
+   
     def update_travel_time_by_queue_length(self, g, queue_length):
+        if self.status == 'closed': return
         estimated_travel_time = queue_length/self.capacity * 3600 + self.fft
         g.update_edge(self.start_nid, self.end_nid, c_double(estimated_travel_time))
 
@@ -357,6 +359,33 @@ class Agent:
             self.status = 'shelter'
         else:
             sp_route = sp.route(self.destin_nid)
+            ### create a path. Order only preserved in Python 3.7+. Do not rely on.
+            # self.route = {self.current_link_start_nid: self.current_link_end_nid}
+            for (start_nid, end_nid) in sp_route:
+                self.route[start_nid] = end_nid
+            sp.clear()
+    
+    def get_partial_path(self, g=None):
+        look_ahead_limit = 3
+        look_ahead_destin = self.current_link_end_nid
+        for look_ahead_i in range(look_ahead_limit):
+            try:
+                look_ahead_destin = self.route[look_ahead_destin]
+            except KeyError:
+                break
+        if self.current_link_end_nid == look_ahead_destin: return
+
+        # calculate partial route
+        sp = g.dijkstra(self.current_link_end_nid, look_ahead_destin)
+        sp_dist = sp.distance(look_ahead_destin)
+        if sp_dist > 1e8:
+            sp.clear()
+            # self.route = {self.current_link_start_nid: self.current_link_end_nid}
+            self.route = {}
+            self.furthest_nid = self.current_link_end_nid
+            self.status = 'shelter'
+        else:
+            sp_route = sp.route(look_ahead_destin)
             ### create a path. Order only preserved in Python 3.7+. Do not rely on.
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
             for (start_nid, end_nid) in sp_route:

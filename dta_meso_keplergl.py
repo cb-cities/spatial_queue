@@ -91,19 +91,21 @@ def make_map(network):
     map_vehicles.add_data(data=closed_link_gdf, name='closed_links')
     return map_vehicles
 
-# preparation
-scen_nm = "no_fire_PARADISE_MAGALIA_rf300"
-results = dta_meso.preparation(random_seed=0, dept_time_col='dept_time_scen_1', scen_nm=scen_nm)
+def main(vphh_id=None, dept_id=None, clos_id=None, contra_id=None, rout_id=None):
+    # preparation
+    scen_nm = "no_fire_v{}_d{}_cl{}_ct{}_r{}".format(vphh_id, dept_id, clos_id, contra_id, rout_id)
+    data, config = dta_meso.preparation(random_seed=0, vphh_id=vphh_id, dept_id=dept_id, clos_id=clos_id, contra_id=contra_id, rout_id=rout_id, scen_nm=scen_nm)
 
-network, links_raster, evacuation_zone, evacuation_buffer, fire_df, check_traffic_flow_links, scen_nm, simulation_outputs, reroute_freq = results.values()
+    fitness=0
+    visualization_t_list = {200, 800, 2000, 4000, 6000, 8000, 12000, 14000, 16000, 18000}
+    for t in range(0, 20001):
+        step_fitness, network = dta_meso.one_step(t, data, config)
+        if step_fitness is not None:
+            fitness += step_fitness
+        if t in visualization_t_list:
+            # visualization_t_dict[t] = make_map(network)
+            map = make_map(network)
+            map.save_to_html(file_name="projects/butte_osmnx/visualization_outputs/map_{}_{}.html".format(scen_nm, t))
 
-fitness=0
-visualization_t_list = {200, 800, 2000, 4000, 6000, 8000, 12000, 14000, 16000, 18000}
-for t in range(0, 18001):
-    step_fitness, network = dta_meso.one_step(t, network, links_raster, evacuation_zone, evacuation_buffer, fire_df, check_traffic_flow_links, scen_nm, simulation_outputs, reroute_freq)
-    if step_fitness is not None:
-        fitness += step_fitness
-    if t in visualization_t_list:
-        # visualization_t_dict[t] = make_map(network)
-        map = make_map(network)
-        map.save_to_html(file_name="projects/butte_osmnx/visualization_outputs/map_{}_{}.html".format(scen_nm, t))
+if __name__ == "__main__":
+    main(vphh_id='123', dept_id='2', rout_id='2')
