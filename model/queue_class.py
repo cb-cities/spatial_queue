@@ -8,6 +8,7 @@ import logging
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+from random import shuffle
 from ctypes import c_double
 import scipy.spatial.distance
 from shapely.wkt import loads
@@ -32,7 +33,7 @@ class Network:
         self.agents = {}
         self.agents_stopped = {}
     
-    def dataframe_to_network(self, network_file_edges=None, network_file_nodes=None):
+    def dataframe_to_network(self, network_file_edges=None, network_file_nodes=None, cf_files = None):
         
         # nodes
         nodes_df = pd.read_csv(home_dir + network_file_nodes)
@@ -41,8 +42,16 @@ class Network:
         nodes_df['y'] = nodes_df['geometry'].apply(lambda x: x.y)
         # edges
         links_df = pd.read_csv(home_dir + network_file_edges)
+        if len(cf_files)>0:
+            for cf_file in cf_files:
+                contraflow_links_df = pd.read_csv(home_dir + cf_file)
+                contraflow_links_df['new_lanes'] = contraflow_links_df['lanes']
+                links_df = links_df.merge(contraflow_links_df[['nid_s', 'nid_e', 'new_lanes']], how='left', on=['nid_s', 'nid_e'])
+                links_df['lanes'] = np.where(np.isnan(links_df['new_lanes']), links_df['lanes'], links_df['new_lanes'])
+
         links_df['fft'] = links_df['length']/links_df['maxmph']*2.237
         links_df['capacity'] = 1900*links_df['lanes']
+        links_df['capacity'] = np.where(links_df['capacity']==0, 0.01, links_df['capacity'])
         links_df = gpd.GeoDataFrame(links_df, crs='epsg:4326', geometry=links_df['geometry'].map(loads)).to_crs('epsg:26910')
         links_df = links_df[['eid', 'nid_s', 'nid_e', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
         # links_df0.to_csv(scratch_dir + simulation_outputs + '/modified_network_edges.csv', index=False)
@@ -126,15 +135,23 @@ class Node:
     def create_virtual_link(self):
         return Link('n{}_vl'.format(self.node_id), 100, 0, 0, 100000, 'v', 'vn{}'.format(self.node_id), self.node_id, loads('LINESTRING({} {}, {} {})'.format(self.x+1, self.y+1, self.x, self.y)))
     
-    def non_conflict_vehicles(self, link_id_dict=None, agent_id_dict=None, node2link_dict=None):
+    def non_conflict_vehicles(self, link_id_dict=None, agent_id_dict=None, node2link_dict=None, special_nodes=None):
         non_conflict_go_vehicles = []
         left_turn_phase = False
         # all potential links
         incoming_links = [l for l in self.incoming_links.keys() if len(link_id_dict[l].queue_vehicles)>0]
+        shuffle(incoming_links)
+        if self.node_id in special_nodes['signal'].keys():
+            if t%60<30: incoming_links = [l for l in incoming_links if l in special_nodes['signal']['{}'.format(self.node_id)]['phase_1']]
+            else: incoming_links = [l for l in incoming_links if l in special_nodes['signal']['{}'.format(self.node_id)]['phase_2']]
+            shuffle(incoming_links)
+        elif self.node_id in special_nodes['priority'].keys():
+            incoming_links = [l for l in special_nodes['priority']['{}'.format(self.node_id)] if l in incoming_links]
         # no queuing vehicle at the intersection
-        if len(incoming_links) == 0: return []
+        if (incoming_links == None): return []
+        if (len(incoming_links) == 0): return []
         # one primary direction
-        go_link = link_id_dict[random.choice(incoming_links)]
+        go_link = link_id_dict[incoming_links[0]]
         # vehicles from primary direction
         incoming_lanes = int(np.floor(go_link.lanes))
         incoming_vehs = len(go_link.queue_vehicles)
@@ -177,8 +194,8 @@ class Node:
             non_conflict_go_vehicles.append([agent_id, agent_incoming_link, agent_outgoing_link])
         return non_conflict_go_vehicles
 
-    def run_node_model(self, t_now, node_id_dict=None, link_id_dict=None, agent_id_dict=None, node2link_dict=None, transfer_link_pairs=None):
-        go_vehicles = self.non_conflict_vehicles( link_id_dict=link_id_dict, agent_id_dict=agent_id_dict, node2link_dict=node2link_dict)
+    def run_node_model(self, t_now, node_id_dict=None, link_id_dict=None, agent_id_dict=None, node2link_dict=None, transfer_link_pairs=None, special_nodes=None):
+        go_vehicles = self.non_conflict_vehicles( link_id_dict=link_id_dict, agent_id_dict=agent_id_dict, node2link_dict=node2link_dict, special_nodes=special_nodes)
         # if self.node_id==8205: print(go_vehicles, '\n\n')
         node_move = 0
         node_move_link_pairs = []
@@ -295,7 +312,7 @@ class Link:
         self.end_node = None
         ### fire related
         self.status = 'open'
-        self.burnt = None
+        self.burnt = 'not_yet'
         self.fire_time = None
         self.fire_type = None
 

@@ -3,7 +3,8 @@
 import os
 import gc
 import sys
-import time 
+import time
+import json 
 import random
 import logging 
 import warnings
@@ -51,15 +52,14 @@ def outside_polygon(evacuation_zone, evacuation_buffer, vehicle_locations):
     evacuation_buffer_dist = haversine.point_to_vertex_dist(vehicle_array, evacuation_buffer)
     return np.sum(evacuation_zone_dist>0), np.sum(evacuation_buffer_dist>0)
 
-def link_model(t, network, links_raster, reroute_freq):
-    # if (t>=75*60) and (t%300 == 0) and (t<=195*60):
-    # if (t%300==0) and (t<=340*60):
-    #     fire_array = rio.open(work_dir + '/projects/butte_osmnx/demand_inputs/fire_cawfe/cawfe_fire_{}.tif'.format(int(t//60)+105)).read(1)
-    #     links_in_fire = np.where(fire_array==0, 0, links_raster)
-    #     links_in_fire = np.unique([links_in_fire.tolist()])
-    #     # print(links_in_fire)
-    # else:
-    #     links_in_fire = []
+def link_model(t, network, links_raster, reroute_freq, link_closure_prob=None):
+    if (t%300==0) and (t<=340*60):
+        fire_array = rio.open(work_dir + '/projects/butte_osmnx/demand_inputs/fire_cawfe/cawfe_spot_fire_{}.tif'.format(int(t//60)+105)).read(1)
+        links_in_fire = np.where(fire_array==0, 0, links_raster)
+        links_in_fire = np.unique([links_in_fire.tolist()])
+        print('# of links in fire: {}'.format(len(links_in_fire)))
+    else:
+        links_in_fire = []
 
     # force to close these links at given time
     if t == 1800: ### pentz rd
@@ -87,20 +87,22 @@ def link_model(t, network, links_raster, reroute_freq):
             pass
         else:
             link.travel_time_list = []
-            # link.update_travel_time(self, t_now, link_time_lookback_freq=None, g=None, update_graph=False)
-            if t%reroute_freq==0: link.update_travel_time_by_queue_length(network.g, len(link.queue_vehicles))
+            if (t+1)%reroute_freq==0: link.update_travel_time_by_queue_length(network.g, len(link.queue_vehicles))
 
-        # # raster fire intersection
-        # if (link.link_id in links_in_fire)and (link.burnt == 'not_yet'):
-        #     link.close_link_to_newcomers(g=network.g)
-        #     link.burnt = 'burnt'
+        # raster fire intersection
+        if link.link_type == 'v': pass
+        elif (link.link_id in links_in_fire) and (link.burnt == 'not_yet'):
+            if np.random.uniform(0,1) < link_closure_prob:
+                link.close_link_to_newcomers(g=network.g)
+            link.burnt = 'burnt'
+        else: pass
     return network
 
-def node_model(t, network, move, check_traffic_flow_links_dict):
+def node_model(t, network, move, check_traffic_flow_links_dict, special_nodes=None):
     node_ids_to_run = set([link.end_nid for link in network.links.values() if len(link.queue_vehicles)>0])
     for node_id in node_ids_to_run:
         node = network.nodes[node_id] 
-        n_t_move, transfer_links, agent_update_dict, link_update_dict = node.run_node_model(t, node_id_dict=network.nodes, link_id_dict=network.links, agent_id_dict=network.agents, node2link_dict=network.node2link_dict)
+        n_t_move, transfer_links, agent_update_dict, link_update_dict = node.run_node_model(t, node_id_dict=network.nodes, link_id_dict=network.links, agent_id_dict=network.agents, node2link_dict=network.node2link_dict, special_nodes=special_nodes)
         move += n_t_move
         ### how many people moves across a specified link pair in this step
         for transfer_link in transfer_links:
@@ -134,7 +136,12 @@ def node_model(t, network, move, check_traffic_flow_links_dict):
 def one_step(t, data, config):
 
     network, links_raster, evacuation_zone, evacuation_buffer, fire_df = data['network'], data['links_raster'], data['evacuation_zone'], data['evacuation_buffer'], data['fire_df']
-    scen_nm, simulation_outputs, rout_id, check_traffic_flow_links, reroute_freq = config['scen_nm'], config['simulation_outputs'], config['rout_id'], config['check_traffic_flow_links'], config['reroute_freq']
+    
+    scen_nm, simulation_outputs, rout_id, check_traffic_flow_links, reroute_freq, clos_id, special_nodes = config['scen_nm'], config['simulation_outputs'], config['rout_id'], config['check_traffic_flow_links'], config['reroute_freq'], config['clos_id'], config['special_nodes']
+
+    # link closure probability when fire arrives
+    clos_id_dict = {'1': 0, '2': 0.1, '3': 1}
+    link_closure_prob = clos_id_dict[clos_id]
 
     move = 0
     step_fitness = None
@@ -167,13 +174,13 @@ def one_step(t, data, config):
     ### link model
     ### Each iteration in the link model is not time-consuming. So just keep using one process.
     t_link_0 = time.time()
-    network = link_model(t, network, links_raster, reroute_freq)
+    network = link_model(t, network, links_raster, reroute_freq, link_closure_prob=link_closure_prob)
     t_link_1 = time.time()
     
     ### node model
     t_node_0 = time.time()
     check_traffic_flow_links_dict = {link_pair: 0 for link_pair in check_traffic_flow_links}
-    network, move, check_traffic_flow_links_dict = node_model(t, network, move, check_traffic_flow_links_dict)
+    network, move, check_traffic_flow_links_dict = node_model(t, network, move, check_traffic_flow_links_dict, special_nodes=special_nodes)
     t_node_1 = time.time()
 
     ### metrics
@@ -215,15 +222,18 @@ def one_step(t, data, config):
         logging.info(" ".join([str(i) for i in [t, arrival_cnts, shelter_cnts, move, '|', len(burnt_links), len(closed_links), '|', round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, round(t_agent_1-t_agent_0, 2), round(t_node_1-t_node_0, 2), round(t_link_1-t_link_0, 2)]]) + " " + str(len(veh_loc)))
     return step_fitness, network
 
-def preparation(random_seed=None, vphh_id=None, dept_id=None, clos_id=None, contra_id=None, rout_id=None, scen_nm=None):
+def preparation(random_seed=None, vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2', scen_nm=None):
     ### logging and global variables
 
     network_file_edges = '/projects/butte_osmnx/network_inputs/butte_edges_sim.csv'
     network_file_nodes = '/projects/butte_osmnx/network_inputs/butte_nodes_sim.csv'
+    network_file_special_nodes = '/projects/butte_osmnx/network_inputs/butte_special_nodes.json'
     network_file_edges_raster = '/projects/butte_osmnx/network_inputs/butte_edges_sim.tif'
     demand_files = ["/projects/butte_osmnx/demand_inputs/od_vphh{}_dept{}.csv".format(vphh_id, dept_id)]
     simulation_outputs = '' ### scratch_folder
     if contra_id=='0': cf_files = []
+    elif contra_id=='3': cf_files = ['/projects/butte_osmnx/network_inputs/contraflow_skyway_3.csv']
+    elif contra_id=='4': cf_files = ['/projects/butte_osmnx/network_inputs/contraflow_skyway_4.csv']
     else: cf_files = []
     reroute_freq = 300
 
@@ -235,9 +245,10 @@ def preparation(random_seed=None, vphh_id=None, dept_id=None, clos_id=None, cont
 
     ### network
     network = Network()
-    network.dataframe_to_network(network_file_edges = network_file_edges, network_file_nodes = network_file_nodes)
+    network.dataframe_to_network(network_file_edges = network_file_edges, network_file_nodes = network_file_nodes, cf_files = cf_files)
     network.add_connectivity()
     links_raster = rio.open(work_dir + network_file_edges_raster).read(1)
+    special_nodes = json.load(open(work_dir + network_file_special_nodes))
     ### traffic signal
     network.links[21671].capacity /= 2
 
@@ -267,7 +278,7 @@ def preparation(random_seed=None, vphh_id=None, dept_id=None, clos_id=None, cont
         scen_nm), 'w') as transfer_stats_outfile:
         transfer_stats_outfile.write("t,"+",".join(['{}-{}'.format(il, ol) for (il, ol) in check_traffic_flow_links])+"\n")
 
-    return {'network': network, 'links_raster': links_raster, 'evacuation_zone': evacuation_zone, 'evacuation_buffer': evacuation_buffer, 'fire_df': fire_df}, {'check_traffic_flow_links': check_traffic_flow_links, 'scen_nm': scen_nm, 'simulation_outputs': simulation_outputs, 'rout_id': rout_id, 'reroute_freq': reroute_freq}
+    return {'network': network, 'links_raster': links_raster, 'evacuation_zone': evacuation_zone, 'evacuation_buffer': evacuation_buffer, 'fire_df': fire_df}, {'check_traffic_flow_links': check_traffic_flow_links, 'scen_nm': scen_nm, 'simulation_outputs': simulation_outputs, 'rout_id': rout_id, 'clos_id': clos_id, 'reroute_freq': reroute_freq, 'special_nodes': special_nodes}
 
 # def main(random_seed=None, dept_time_col=None):
     

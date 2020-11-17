@@ -91,9 +91,9 @@ def make_map(network):
     map_vehicles.add_data(data=closed_link_gdf, name='closed_links')
     return map_vehicles
 
-def main(vphh_id=None, dept_id=None, clos_id=None, contra_id=None, rout_id=None):
+def main(vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2'):
     # preparation
-    scen_nm = "no_fire_v{}_d{}_cl{}_ct{}_r{}".format(vphh_id, dept_id, clos_id, contra_id, rout_id)
+    scen_nm = "v{}_d{}_cl{}_ct{}_ru{}".format(vphh_id, dept_id, clos_id, contra_id, rout_id)
     data, config = dta_meso.preparation(random_seed=0, vphh_id=vphh_id, dept_id=dept_id, clos_id=clos_id, contra_id=contra_id, rout_id=rout_id, scen_nm=scen_nm)
 
     fitness=0
