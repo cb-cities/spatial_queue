@@ -22,7 +22,7 @@ def extract_vehicle_locations(network):
         if link.link_type == 'v':
             continue
         if link.burnt == 'burnt':
-            closed_link_position.append([link.link_id, link.midpoint[0], link.midpoint[1]])
+            closed_link_position.append([link.link_id, link.burnt, link.status, link.geometry])
         link_geometry = link.geometry
         link_length = link.geometry.length
         link_lanes = link.lanes
@@ -68,11 +68,13 @@ def add_fire(map_vehicles, fire_df):
     return map_vehicles
 
 def add_closed_links(closed_link_position):
-    closed_link_df = pd.DataFrame(closed_link_position, columns=['link_id', 'x', 'y'])
-    closed_link_gdf = gpd.GeoDataFrame(closed_link_df, crs='epsg:26910', geometry=[Point(xy) for xy in zip(closed_link_df['x'], closed_link_df['y'])]).to_crs('epsg:4326')
-    closed_link_gdf['lon'] = closed_link_gdf['geometry'].apply(lambda x: x.x)
-    closed_link_gdf['lat'] = closed_link_gdf['geometry'].apply(lambda x: x.y)
-    closed_link_gdf = closed_link_gdf[['link_id', 'lon', 'lat']]
+    closed_link_df = pd.DataFrame(closed_link_position, columns=['link_id', 'burnt', 'status', 'geometry'])
+    closed_link_gdf = gpd.GeoDataFrame(closed_link_df, crs='epsg:26910', geometry=closed_link_df['geometry']).to_crs('epsg:4326')
+    closed_link_gdf['x_s'] = closed_link_gdf['geometry'].apply(lambda x: x.coords[0][0])
+    closed_link_gdf['y_s'] = closed_link_gdf['geometry'].apply(lambda x: x.coords[0][1])
+    closed_link_gdf['x_e'] = closed_link_gdf['geometry'].apply(lambda x: x.coords[-1][0])
+    closed_link_gdf['y_e'] = closed_link_gdf['geometry'].apply(lambda x: x.coords[-1][1])
+    closed_link_gdf = closed_link_gdf[['link_id','burnt', 'status', 'x_s', 'y_s', 'x_e', 'y_e', 'geometry']]
     return closed_link_gdf
 
 def make_map(network):
@@ -93,7 +95,7 @@ def make_map(network):
 
 def main(vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2'):
     # preparation
-    scen_nm = "v{}_d{}_cl{}_ct{}_ru{}".format(vphh_id, dept_id, clos_id, contra_id, rout_id)
+    scen_nm = "test_v{}_d{}_cl{}_ct{}_ru{}".format(vphh_id, dept_id, clos_id, contra_id, rout_id)
     data, config = dta_meso.preparation(random_seed=0, vphh_id=vphh_id, dept_id=dept_id, clos_id=clos_id, contra_id=contra_id, rout_id=rout_id, scen_nm=scen_nm)
 
     fitness=0
@@ -108,4 +110,4 @@ def main(vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2'):
             map.save_to_html(file_name="projects/butte_osmnx/visualization_outputs/map_{}_{}.html".format(scen_nm, t))
 
 if __name__ == "__main__":
-    main(vphh_id='123', dept_id='2', rout_id='2')
+    main(contra_id='4')

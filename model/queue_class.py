@@ -12,7 +12,9 @@ from random import shuffle
 from ctypes import c_double
 import scipy.spatial.distance
 from shapely.wkt import loads
+from shapely.ops import split
 from shapely.geometry import Point
+from shapely.geometry import LineString
 # for coordinate transformation
 from shapely.ops import transform
 import pyproj
@@ -33,13 +35,14 @@ class Network:
         self.agents = {}
         self.agents_stopped = {}
     
-    def dataframe_to_network(self, network_file_edges=None, network_file_nodes=None, cf_files = None):
+    def dataframe_to_network(self, network_file_edges=None, network_file_nodes=None, cf_files = None, special_nodes=None):
         
         # nodes
         nodes_df = pd.read_csv(home_dir + network_file_nodes)
         nodes_df = gpd.GeoDataFrame(nodes_df, crs='epsg:4326', geometry=[Point(x, y) for (x, y) in zip(nodes_df.lon, nodes_df.lat)]).to_crs('epsg:26910')
         nodes_df['x'] = nodes_df['geometry'].apply(lambda x: x.x)
         nodes_df['y'] = nodes_df['geometry'].apply(lambda x: x.y)
+        nodes_df = nodes_df[['nid', 'x', 'y', 'osmid']]
         # edges
         links_df = pd.read_csv(home_dir + network_file_edges)
         if len(cf_files)>0:
@@ -56,6 +59,66 @@ class Network:
         links_df = links_df[['eid', 'nid_s', 'nid_e', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
         # links_df0.to_csv(scratch_dir + simulation_outputs + '/modified_network_edges.csv', index=False)
         
+        ### link closure
+        for closure_link in special_nodes['closure']:
+            links_df.loc[links_df['eid']==closure_link, 'fft'] = 1e8
+            links_df.loc[links_df['eid']==closure_link, 'maxmph'] = 0.0000001
+
+        ### turn restrictions
+        new_nodes = []
+        new_links = []
+        new_node_id = nodes_df.shape[0]
+        new_link_id = links_df.shape[0]
+        for prohibit_node, prohibit_turns in special_nodes['prohibition'].items():
+            # node to be removed
+            prohibit_node = int(prohibit_node)
+            # temporarily holding new nodes
+            tmp_start_nodes = []
+            tmp_end_nodes = []
+            for row in links_df.loc[links_df['nid_s']==prohibit_node].itertuples():
+                links_df.loc[links_df['eid']==getattr(row, 'eid'), 'nid_s'] = new_node_id
+                tmp_point = getattr(row, 'geometry').interpolate(0.1, normalized=True)
+                links_df.loc[links_df['eid']==getattr(row, 'eid'), 'geometry'] = list(split(getattr(row, 'geometry'), tmp_point.buffer(1)))[2]
+                [tmp_x, tmp_y] = list(tmp_point.coords)[0]
+                tmp_start_nodes.append([new_node_id, tmp_x, tmp_y, 'n{}_l{}'.format(prohibit_node, getattr(row, 'eid')), getattr(row, 'eid')])
+                new_node_id += 1
+            for row in links_df.loc[links_df['nid_e']==prohibit_node].itertuples():
+                links_df.loc[links_df['eid']==getattr(row, 'eid'), 'nid_e'] = new_node_id
+                tmp_point = getattr(row, 'geometry').interpolate(0.9, normalized=True)
+                links_df.loc[links_df['eid']==getattr(row, 'eid'), 'geometry'] = list(split(getattr(row, 'geometry'), tmp_point.buffer(1)))[0]
+                [tmp_x, tmp_y] = list(tmp_point.coords)[0]
+                tmp_end_nodes.append([new_node_id, tmp_x, tmp_y, 'n{}_l{}'.format(prohibit_node, getattr(row, 'eid')), getattr(row, 'eid')])
+                new_node_id += 1
+            new_nodes += tmp_start_nodes
+            new_nodes += tmp_end_nodes
+            # prohibit turns
+            # print(prohibit_turns)
+            # print(tmp_start_nodes)
+            # print(tmp_end_nodes)
+            prohibit_turns = [(inlink, outlink) for [inlink, outlink] in prohibit_turns]
+            for start_node in tmp_end_nodes:
+                for end_node in tmp_start_nodes:
+                    if (start_node[-1], end_node[-1]) not in prohibit_turns:
+                        print((start_node[-1], end_node[-1]), prohibit_turns)
+                        new_links.append([new_link_id, start_node[0], end_node[0], start_node[1], start_node[2], end_node[1], end_node[2]])
+                        new_link_id += 1
+        new_links_df = pd.DataFrame(new_links, columns=['eid','nid_s', 'nid_e', 'start_x', 'start_y', 'end_x', 'end_y'])
+        new_links_df['lanes'] = 100
+        new_links_df['capacity'] = 100000
+        new_links_df['maxmph'] = 100000
+        new_links_df['fft'] = 0
+        new_links_df['length'] = 0
+        new_links_df['geometry'] = new_links_df.apply(lambda x: LineString([[x['start_x'], x['start_y']], [x['end_x'], x['end_y']]]), axis=1)
+        new_links_df = new_links_df[['eid', 'nid_s', 'nid_e', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
+        links_df = pd.concat([links_df, new_links_df])
+        # new nodes
+        new_nodes_df = pd.DataFrame(new_nodes, columns=['nid', 'x', 'y', 'osmid', 'link'])
+        print(nodes_df.shape, new_nodes_df.shape)
+        nodes_df = pd.concat([nodes_df, new_nodes_df[['nid', 'x', 'y', 'osmid']]])
+        print(nodes_df.shape)
+        nodes_df.to_csv('nodes.csv', index=False)
+        links_df.to_csv('links.csv', index=False)
+
         ### Convert to mtx
         self.g = interface.from_dataframe(links_df, 'nid_s', 'nid_e', 'fft')
 
@@ -158,6 +221,7 @@ class Node:
         for lane in range(min(incoming_lanes, incoming_vehs)):
             agent_id = go_link.queue_vehicles[lane]
             agent_incoming_link = go_link.link_id
+            # agent_id_dict[agent_id].find_next_link(node2link_dict=node2link_dict)
             agent_outgoing_link = agent_id_dict[agent_id].next_link
             non_conflict_go_vehicles.append([agent_id, agent_incoming_link, agent_outgoing_link])
             if agent_outgoing_link is None: pass # current link end is destination/shelter
@@ -227,7 +291,8 @@ class Node:
             try:
                 [_, outflow_link_run_veh, outflow_link_in_c, outflow_link_st_c] = link_update_dict[agent_ol_id]
             except KeyError: # agent_ol_id is None
-                pass
+                print(agent_id, agent_ol_id, self.node_id, agent.route)
+                sys.exit(0)
 
             ### arrival
             if self.node_id in [agent.destin_nid, agent.furthest_nid]:
@@ -374,10 +439,12 @@ class Agent:
             self.route = {}
             self.furthest_nid = self.current_link_end_nid
             self.status = 'shelter'
+            # print(self.agent_id, self.current_link_start_nid, self.current_link_end_nid)
         else:
             sp_route = sp.route(self.destin_nid)
             ### create a path. Order only preserved in Python 3.7+. Do not rely on.
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
+            self.route = {}
             for (start_nid, end_nid) in sp_route:
                 self.route[start_nid] = end_nid
             sp.clear()
@@ -405,6 +472,7 @@ class Agent:
             sp_route = sp.route(look_ahead_destin)
             ### create a path. Order only preserved in Python 3.7+. Do not rely on.
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
+            self.route = {}
             for (start_nid, end_nid) in sp_route:
                 self.route[start_nid] = end_nid
             sp.clear()
@@ -420,7 +488,7 @@ class Agent:
                 self.next_link_end_nid = self.route[self.current_link_end_nid]
                 self.next_link = node2link_dict[ (self.current_link_end_nid, self.next_link_end_nid) ]
 
-    def find_next_link(self, t_now, node2link_dict=None):
+    def find_next_link(self, node2link_dict=None):
         ### for enroute vehicles
         # self.current_link_end_nid = self.route[self.current_link_start_nid]
         self.this_link = node2link_dict[ (self.current_link_start_nid, self.current_link_end_nid) ]

@@ -362,7 +362,7 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     links_df0['fft'] = links_df0['length']/links_df0['maxmph']*2.237
     links_df0['capacity'] = 1900*links_df0['lanes']
     links_df0 = links_df0[['edge_id_igraph', 'start_igraph', 'end_igraph', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
-    links_df0.to_csv(scratch_dir + simulation_outputs + '/modified_network_edges.csv', index=False)
+    links_df0.to_csv(scratch_dir + simulation_outputs + '/modified_network_edges_{}.csv'.format(scen_nm), index=False)
     # sys.exit(0)
 
     nodes_df0 = pd.read_csv(work_dir + network_file_nodes)
@@ -505,6 +505,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         '/projects/berkeley_trb/network_inputs/cedar.csv',
         '/projects/berkeley_trb/network_inputs/rose.csv',
         '/projects/berkeley_trb/network_inputs/shasta.csv',
+        '/projects/berkeley_trb/network_inputs/oxfful.csv'
         ]
     elif counterflow in [2]:
         cf_files = ['/projects/berkeley_trb/network_inputs/marin.csv', 
@@ -512,6 +513,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         '/projects/berkeley_trb/network_inputs/cedar.csv',
         '/projects/berkeley_trb/network_inputs/rose.csv',
         '/projects/berkeley_trb/network_inputs/shasta.csv',
+        '/projects/berkeley_trb/network_inputs/oxfful.csv',
         '/projects/berkeley_trb/network_inputs/shamlk.csv',
         '/projects/berkeley_trb/network_inputs/university.csv',
         ]
@@ -597,7 +599,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
             with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm),'a') as t_stats_outfile:
                 t_stats_outfile.write(",".join([str(x) for x in [t, agent_init_cnt, agent_load_cnt, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + "\n")
         ### stepped outputs
-        if t%900==0:
+        if t%300==0:
             link_output = pd.DataFrame([(link.id, len(link.queue_veh), len(link.run_veh), len(link.shelter_veh), round(link.travel_time, 2)) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'q', 'r', 's', 't'])
             link_output[(link_output['q']>0) | (link_output['r']>0)].reset_index(drop=True).to_csv(scratch_dir + simulation_outputs + '/link_stats/link_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
             node_predepart = pd.DataFrame([(agent.cle, 1) for agent in agent_id_dict.values() if (agent.status in [None, 'loaded'])], columns=['node_id', 'predepart_cnt']).groupby('node_id').agg({'predepart_cnt': np.sum}).reset_index()
@@ -608,4 +610,4 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         #     print(link_id_dict[20158].queue_veh, link_id_dict[20158].run_veh)
 
 if __name__ == "__main__":
-    main(random_seed=0, fire_speed=1, dept_time_id='mid', tow_pct=0.1, hh_veh='survey', reroute_pct=0.15, phase_tdiff=0, counterflow=2)
+    main(random_seed=0, fire_speed=1, dept_time_id='mid', tow_pct=0.1, hh_veh='survey', reroute_pct=0.15, phase_tdiff=0, counterflow=1)

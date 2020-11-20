@@ -90,10 +90,10 @@ def link_model(t, network, links_raster, reroute_freq, link_closure_prob=None):
             if (t+1)%reroute_freq==0: link.update_travel_time_by_queue_length(network.g, len(link.queue_vehicles))
 
         # raster fire intersection
-        if link.link_type == 'v': pass
-        elif (link.link_id in links_in_fire) and (link.burnt == 'not_yet'):
+        if (link.link_type in ['residential', 'unclassified']) and (link.link_id in links_in_fire) and (link.burnt == 'not_yet'):
             if np.random.uniform(0,1) < link_closure_prob:
                 link.close_link_to_newcomers(g=network.g)
+                # print(link.link_id)
             link.burnt = 'burnt'
         else: pass
     return network
@@ -117,7 +117,7 @@ def node_model(t, network, move, check_traffic_flow_links_dict, special_nodes=No
             else:
                 agent = network.agents[agent_id]
                 [agent.status, agent.current_link_start_nid, agent.current_link_end_nid,  agent.current_link_enter_time] = agent_new_info
-                agent.find_next_link(t, node2link_dict = network.node2link_dict)
+                agent.find_next_link(node2link_dict = network.node2link_dict)
 
         for link_id, link_new_info in link_update_dict.items():
             if link_new_info[0] == 'inflow':
@@ -150,23 +150,25 @@ def one_step(t, data, config):
     for agent_id, agent in network.agents.items():
         if rout_id == '1':
             # initial route 
-            if (t==0) or (t%reroute_freq==0): routing_status = agent.get_path(g=network.g)
+            if (t==0) or (t%reroute_freq==0) and (agent.status != 'shelter'): routing_status = agent.get_path(g=network.g)
             agent.load_vehicle(t, node2link_dict=network.node2link_dict, link_id_dict=network.links)
             # reroute upon closure
             if (agent.next_link is not None) and (network.links[agent.next_link].status=='closed'):
                 routing_status = agent.get_path(g=network.g)
-                agent.find_next_link(t, node2link_dict=network.node2link_dict)
+                agent.find_next_link(node2link_dict=network.node2link_dict)
         if rout_id == '2':
             # initial route 
-            if (t==0) or (t%reroute_freq==0 and t < 9000): routing_status = agent.get_path(g=network.g)
+            if (t==0) or (t%reroute_freq==0 and t < 9000) and (agent.status != 'shelter'):
+                routing_status = agent.get_path(g=network.g)
+                if agent.agent_id == 7910: print(t, agent.current_link_end_nid, agent.route)
             agent.load_vehicle(t, node2link_dict=network.node2link_dict, link_id_dict=network.links)
             # reroute upon closure
             if (t<9000) and (agent.next_link is not None) and (network.links[agent.next_link].status=='closed'):
                 routing_status = agent.get_path(g=network.g)
-                agent.find_next_link(t, node2link_dict=network.node2link_dict)
+                agent.find_next_link(node2link_dict=network.node2link_dict)
             elif (t>=9000) and (agent.next_link is not None) and (network.links[agent.next_link].status=='closed'):
                 routing_status = agent.get_partial_path(g=network.g)
-                agent.find_next_link(t, node2link_dict=network.node2link_dict)
+                agent.find_next_link(node2link_dict=network.node2link_dict)
             else:
                 pass
     t_agent_1 = time.time()
@@ -244,13 +246,13 @@ def preparation(random_seed=None, vphh_id='123', dept_id='2', clos_id='2', contr
     print('log file created')
 
     ### network
-    network = Network()
-    network.dataframe_to_network(network_file_edges = network_file_edges, network_file_nodes = network_file_nodes, cf_files = cf_files)
-    network.add_connectivity()
     links_raster = rio.open(work_dir + network_file_edges_raster).read(1)
     special_nodes = json.load(open(work_dir + network_file_special_nodes))
+    network = Network()
+    network.dataframe_to_network(network_file_edges = network_file_edges, network_file_nodes = network_file_nodes, cf_files = cf_files, special_nodes=special_nodes)
+    network.add_connectivity()
     ### traffic signal
-    network.links[21671].capacity /= 2
+    # network.links[21671].capacity /= 2
 
     ### demand
     network.add_demand(demand_files = demand_files)
