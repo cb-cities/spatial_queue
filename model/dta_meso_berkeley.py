@@ -13,6 +13,7 @@ from ctypes import *
 import scipy.io as sio
 import geopandas as gpd
 from shapely.wkt import loads
+from shapely.geometry import Point
 import scipy.sparse as ssparse
 from multiprocessing import Pool
 from scipy.stats import truncnorm
@@ -27,10 +28,10 @@ sys.path.insert(0, home_dir)
 import util.haversine as haversine
 
 class Node:
-    def __init__(self, id, lon, lat, type, osmid=None):
+    def __init__(self, id, x, y, type, osmid=None):
         self.id = id
-        self.lon = lon
-        self.lat = lat
+        self.x = x
+        self.y = y
         self.type = type
         self.osmid = osmid
         ### derived
@@ -41,22 +42,22 @@ class Node:
         self.status = None
 
     def create_virtual_node(self):
-        return Node('vn{}'.format(self.id), self.lon+0.001, self.lat+0.001, 'v')
+        return Node('vn{}'.format(self.id), self.x+1, self.y+1, 'v')
 
     def create_virtual_link(self):
-        return Link('n{}_vl'.format(self.id), 100, 0, 0, 100000, 'v', 'vn{}'.format(self.id), self.id, 'LINESTRING({} {}, {} {})'.format(self.lon+0.001, self.lat+0.001, self.lon, self.lat))
+        return Link('n{}_vl'.format(self.id), 100, 0, 0, 100000, 'v', 'vn{}'.format(self.id), self.id, loads('LINESTRING({} {}, {} {})'.format(self.x+1, self.y+1, self.x, self.y)))
     
     def calculate_straight_ahead_links(self):
         for il in self.in_links.keys():
-            x_start = node_id_dict[link_id_dict[il].start_nid].lon
-            y_start = node_id_dict[link_id_dict[il].start_nid].lat
-            in_vec = (self.lon-x_start, self.lat-y_start)
+            x_start = node_id_dict[link_id_dict[il].start_nid].x
+            y_start = node_id_dict[link_id_dict[il].start_nid].y
+            in_vec = (self.x-x_start, self.y-y_start)
             sa_ol = None ### straight ahead out link
             ol_dir = 180
             for ol in self.out_links:
-                x_end = node_id_dict[link_id_dict[ol].end_nid].lon
-                y_end = node_id_dict[link_id_dict[ol].end_nid].lat
-                out_vec = (x_end-self.lon, y_end-self.lat)
+                x_end = node_id_dict[link_id_dict[ol].end_nid].x
+                y_end = node_id_dict[link_id_dict[ol].end_nid].y
+                out_vec = (x_end-self.x, y_end-self.y)
                 dot = (in_vec[0]*out_vec[0] + in_vec[1]*out_vec[1])
                 det = (in_vec[0]*out_vec[1] - in_vec[1]*out_vec[0])
                 new_ol_dir = np.arctan2(det, dot)*180/np.pi
@@ -188,9 +189,11 @@ class Link:
         self.type = type
         self.start_nid = start_nid
         self.end_nid = end_nid
-        self.geometry = loads(geometry)
+        # self.geometry = loads(geometry)
+        self.geometry = geometry
         ### derived
         self.store_cap = max(15, length*lanes) ### at least allow any vehicle to pass. i.e., the road won't block any vehicle because of the road length
+        # self.store_cap = max(15, length*lanes, (self.capacity/3600+1)*15)
         self.in_c = self.capacity/3600.0 # capacity in veh/s
         self.ou_c = self.capacity/3600.0
         self.st_c = self.store_cap # remaining storage capacity
@@ -270,9 +273,9 @@ class Agent:
             return None, None, 0 ### id, next_node, dir
         agent_next_node = [end for (start, end) in self.route_igraph if start == node_id][0]
         ol = node2link_dict[(node_id, agent_next_node)]
-        x_start, y_start = node_id_dict[self.cls].lon, node_id_dict[self.cls].lat
-        x_mid, y_mid = node_id_dict[node_id].lon, node_id_dict[node_id].lat
-        x_end, y_end = node_id_dict[agent_next_node].lon, node_id_dict[agent_next_node].lat
+        x_start, y_start = node_id_dict[self.cls].x, node_id_dict[self.cls].y
+        x_mid, y_mid = node_id_dict[node_id].x, node_id_dict[node_id].y
+        x_end, y_end = node_id_dict[agent_next_node].x, node_id_dict[agent_next_node].y
         in_vec, out_vec = (x_mid-x_start, y_mid-y_start), (x_end-x_mid, y_end-y_mid)
         dot, det = (in_vec[0]*out_vec[0] + in_vec[1]*out_vec[1]), (in_vec[0]*out_vec[1] - in_vec[1]*out_vec[0])
         agent_dir = np.arctan2(det, dot)*180/np.pi 
@@ -303,11 +306,11 @@ class Agent:
             sp.clear()
 
 ### distance to fire starting point
-def fire_point_distance(veh_loc):
-    fire_lon, fire_lat = -122.249261, 37.910399
-    [veh_lon, veh_lat] = zip(*veh_loc)
-    veh_firestart_dist = haversine.haversine(np.array(veh_lat), np.array(veh_lon), fire_lat, fire_lon)
-    return veh_firestart_dist
+# def fire_point_distance(veh_loc):
+#     fire_lon, fire_lat = -122.249261, 37.910399
+#     [veh_lon, veh_lat] = zip(*veh_loc)
+#     veh_firestart_dist = haversine.haversine(np.array(veh_lat), np.array(veh_lon), fire_lat, fire_lon)
+#     return veh_firestart_dist
 ### distance to fire frontier
 def fire_frontier_distance(fire_frontier, veh_loc, t):
     # [veh_lon, veh_lat] = zip(*veh_loc)
@@ -323,6 +326,8 @@ def fire_frontier_distance(fire_frontier, veh_loc, t):
         veh_fire_dist_before = haversine.point_to_vertex_dist(vehicle_loc_array, fire_frontier_before)
         veh_fire_dist_after = haversine.point_to_vertex_dist(vehicle_loc_array, fire_frontier_after)
         veh_fire_dist = veh_fire_dist_before * (t_after-t)/(t_after-t_before) + veh_fire_dist_after * (t-t_before)/(t_after-t_before)
+        # print(veh_fire_dist_before, veh_fire_dist_after)
+        # sys.exit(0)
     return veh_fire_dist# np.mean(veh_fire_dist), np.sum(veh_fire_dist<0)
 ### numbers of vehicles that have left the evacuation zone / buffer distance
 def outside_polygon(evacuation_zone, evacuation_buffer, veh_loc):
@@ -336,6 +341,7 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     logger = logging.getLogger("bk_evac")
 
     links_df0 = pd.read_csv(work_dir + network_file_edges)
+    links_df0 = gpd.GeoDataFrame(links_df0, crs='epsg:4326', geometry=links_df0['geometry'].map(loads)).to_crs(3857)
     ### lane assumptions
     ### leave to OSM specified values for motorway and trunk
     links_df0['lanes'] = np.where(links_df0['type'].isin(['primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link']), 2, links_df0['lanes'])
@@ -366,6 +372,9 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     # sys.exit(0)
 
     nodes_df0 = pd.read_csv(work_dir + network_file_nodes)
+    nodes_df0 = gpd.GeoDataFrame(nodes_df0, crs='epsg:4326', geometry=[Point(xy) for xy in zip(nodes_df0['lon'], nodes_df0['lat'])]).to_crs(3857)
+    nodes_df0['x'] = nodes_df0['geometry'].apply(lambda x: x.x)
+    nodes_df0['y'] = nodes_df0['geometry'].apply(lambda x: x.y)
 
     ### Convert to mtx
     wgh = links_df0['fft']
@@ -382,7 +391,7 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     nodes = []
     links = []
     for row in nodes_df0.itertuples():
-        real_node = Node(getattr(row, 'node_id_igraph'), getattr(row, 'lon'), getattr(row, 'lat'), 'real', getattr(row, 'node_osmid'))
+        real_node = Node(getattr(row, 'node_id_igraph'), getattr(row, 'x'), getattr(row, 'y'), 'real', getattr(row, 'node_osmid'))
         virtual_node = real_node.create_virtual_node()
         virtual_link = real_node.create_virtual_link()
         nodes.append(real_node)
@@ -520,7 +529,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     else:
         cf_files = []
 
-    scen_nm = 'rs{}_f{}_dt{}_tow{}_hhv{}_r{}_pt{}_cf{}'.format(random_seed, fire_speed, dept_time_id, tow_pct, hh_veh, reroute_pct, phase_tdiff, counterflow)
+    scen_nm = 'crs3857_rs{}_f{}_dt{}_tow{}_hhv{}_r{}_pt{}_cf{}'.format(random_seed, fire_speed, dept_time_id, tow_pct, hh_veh, reroute_pct, phase_tdiff, counterflow)
     logger = logging.getLogger("bk_evac")
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
     logging.info(scen_nm)
@@ -543,7 +552,8 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     evacuation_zone_df = pd.read_csv(open(work_dir+'/projects/berkeley_trb/demand_inputs/manual_evacuation_zone.csv'))
     evacuation_zone_gdf = gpd.GeoDataFrame(evacuation_zone_df, crs='epsg:4326', geometry=evacuation_zone_df['geometry'].map(loads))
     evacuation_zone = evacuation_zone_gdf['geometry'].unary_union
-    evacuation_buffer = evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).to_crs('epsg:4326').unary_union
+    # evacuation_buffer = evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).to_crs('epsg:4326').unary_union
+    evacuation_buffer = evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).unary_union
     logging.info('Evacuation zone is {} km2, considering 1mile buffer it is {} km2'.format(evacuation_zone_gdf.to_crs('epsg:3857')['geometry'].unary_union.area/1e6, evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).unary_union.area/1e6))
 
     agents = demand(nodes_osmid_dict, dept_time=dept_time, demand_files = demand_files, tow_pct=tow_pct, phase_tdiff=phase_tdiff, reroute_pct=reroute_pct)
@@ -552,7 +562,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     ### fire growth
     fire_frontier = pd.read_csv(open(work_dir + '/projects/berkeley_trb/demand_inputs/fire_fitted_ellipse.csv'))
     fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
-    fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads))
+    fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads)).to_crs(3857)
     
     t_s, t_e = 0, 3600*4+1
     ### time step output
@@ -588,6 +598,9 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
                     veh_loc.append(link_id_dict[node2link_dict[(agent.cls, agent.cle)]].midpoint)
                     veh_loc_id.append(agent.id)
             veh_fire_dist = fire_frontier_distance(fire_frontier, veh_loc, t)
+            # print(veh_loc[0:10])
+            # print(fire_frontier['geometry'])
+            # sys.exit(0)
             avg_fire_dist, neg_dist = np.mean(veh_fire_dist), np.sum(veh_fire_dist<0)
             for v_i in range(len(veh_loc_id)):
                 if veh_fire_dist[v_i] <0:

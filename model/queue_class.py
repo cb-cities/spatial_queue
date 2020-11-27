@@ -291,8 +291,9 @@ class Node:
             try:
                 [_, outflow_link_run_veh, outflow_link_in_c, outflow_link_st_c] = link_update_dict[agent_ol_id]
             except KeyError: # agent_ol_id is None
-                print(agent_id, agent_ol_id, self.node_id, agent.route)
-                sys.exit(0)
+                # print(agent_id, agent_ol_id, self.node_id, agent.origin_nid, agent.destin_nid, agent.route)
+                # sys.exit(0)
+                outflow_link_st_c = None
 
             ### arrival
             if self.node_id in [agent.destin_nid, agent.furthest_nid]:
@@ -306,6 +307,9 @@ class Node:
                 else:
                     agent_update_dict[agent_id] = ['arrive', self.node_id, None, t_now]
             ### no storage capacity downstream
+            elif outflow_link_st_c is None:
+                print(agent_id, agent_ol_id, self.node_id, agent.origin_nid, agent.destin_nid, agent.route)
+                sys.exit(0)
             elif outflow_link_st_c < agent.vehicle_length:
                 pass ### no blocking, as # veh = # lanes
             ### inlink-sending, outlink-receiving both permits
@@ -378,6 +382,7 @@ class Link:
         ### fire related
         self.status = 'open'
         self.burnt = 'not_yet'
+        self.burnt_time = None
         self.fire_time = None
         self.fire_type = None
 

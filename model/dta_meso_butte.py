@@ -54,7 +54,7 @@ def outside_polygon(evacuation_zone, evacuation_buffer, vehicle_locations):
 
 def link_model(t, network, links_raster, reroute_freq, link_closure_prob=None):
     if (t%300==0) and (t<=340*60):
-        fire_array = rio.open(work_dir + '/projects/butte_osmnx/demand_inputs/fire_cawfe/cawfe_spot_fire_{}.tif'.format(int(t//60)+105)).read(1)
+        fire_array = rio.open(work_dir + '/projects/butte_osmnx/demand_inputs/fire_cawfe/cawfe_cluster_spot_fire_{}.tif'.format(int(t//60)+105)).read(1)
         links_in_fire = np.where(fire_array==0, 0, links_raster)
         links_in_fire = np.unique([links_in_fire.tolist()])
         print('# of links in fire: {}'.format(len(links_in_fire)))
@@ -90,12 +90,14 @@ def link_model(t, network, links_raster, reroute_freq, link_closure_prob=None):
             if (t+1)%reroute_freq==0: link.update_travel_time_by_queue_length(network.g, len(link.queue_vehicles))
 
         # raster fire intersection
-        if (link.link_type in ['residential', 'unclassified']) and (link.link_id in links_in_fire) and (link.burnt == 'not_yet'):
-            if np.random.uniform(0,1) < link_closure_prob:
-                link.close_link_to_newcomers(g=network.g)
+        if (link.link_type!='v') and (link.link_id in links_in_fire) and (link.burnt == 'not_yet'):
+            if (link.link_type in ['residential', 'unclassified']) and (np.random.uniform(0,1) < link_closure_prob):
+                link.close_link_to_newcomers(t, g=network.g)
                 # print(link.link_id)
             link.burnt = 'burnt'
         else: pass
+        if (link.status=='open') and (link.burnt=='burnt') and (link.burnt_time is not None) and (t-link.burnt_time>1800):
+            link.burnt='burnt_over'
     return network
 
 def node_model(t, network, move, check_traffic_flow_links_dict, special_nodes=None):
@@ -110,7 +112,7 @@ def node_model(t, network, move, check_traffic_flow_links_dict, special_nodes=No
                 check_traffic_flow_links_dict[transfer_link] += 1
         for agent_id, agent_new_info in agent_update_dict.items():
             ### move stopped vehicles to a separate dictionary
-            if agent_new_info[0] in ['shelter_arrive', 'arrive']:
+            if agent_new_info[0] in ['shelter_arrive', 'arrive', 'leave']:
                 network.agents_stopped[agent_id] = agent_new_info
                 del network.agents[agent_id]
             ### update vehicles still not stopped
@@ -148,9 +150,22 @@ def one_step(t, data, config):
     ### agent model
     t_agent_0 = time.time()
     for agent_id, agent in network.agents.items():
+        if (agent.status == 'shelter') or (agent.status == 'leave'):
+            continue
+        # if agent_id==15470:
+        #     print(t, agent_id, agent.current_link_start_nid, agent.current_link_end_nid)
+        current_link = network.links[network.node2link_dict[(agent.current_link_start_nid, agent.current_link_end_nid)]]
+        if (agent.current_link_enter_time is not None) and (t-agent.current_link_enter_time>max(300,current_link.fft*5)) and current_link.burnt == 'burnt':
+            agent.route = {}
+            agent.furthest_nid = agent.current_link_end_nid
+            agent.status = 'leave'
+            current_link.queue_vehicles = [v for v in current_link.queue_vehicles if v!=agent_id]
+            current_link.run_vehicles = [v for v in current_link.run_vehicles if v!=agent_id]
         if rout_id == '1':
             # initial route 
-            if (t==0) or (t%reroute_freq==0) and (agent.status != 'shelter'): routing_status = agent.get_path(g=network.g)
+            if (t==0) or (t%reroute_freq==0) and (agent.status != 'shelter') and (agent.status != 'leave'):
+                routing_status = agent.get_path(g=network.g)
+                agent.find_next_link(node2link_dict=network.node2link_dict)
             agent.load_vehicle(t, node2link_dict=network.node2link_dict, link_id_dict=network.links)
             # reroute upon closure
             if (agent.next_link is not None) and (network.links[agent.next_link].status=='closed'):
@@ -158,9 +173,10 @@ def one_step(t, data, config):
                 agent.find_next_link(node2link_dict=network.node2link_dict)
         if rout_id == '2':
             # initial route 
-            if (t==0) or (t%reroute_freq==0 and t < 9000) and (agent.status != 'shelter'):
+            if (t==0) or (t%reroute_freq==0 and t < 9000) and (agent.status != 'shelter') and (agent.status != 'leave'):
                 routing_status = agent.get_path(g=network.g)
-                if agent.agent_id == 7910: print(t, agent.current_link_end_nid, agent.route)
+                agent.find_next_link(node2link_dict=network.node2link_dict)
+                if agent.agent_id == 15470: print(t, agent.current_link_end_nid, agent.route)
             agent.load_vehicle(t, node2link_dict=network.node2link_dict, link_id_dict=network.links)
             # reroute upon closure
             if (t<9000) and (agent.next_link is not None) and (network.links[agent.next_link].status=='closed'):
@@ -189,6 +205,7 @@ def one_step(t, data, config):
     if t%100 == 0:
         arrival_cnts = len([agent_id for agent_id, agent_info in network.agents_stopped.items() if agent_info[0]=='arrive'])
         shelter_cnts = len([agent_id for agent_id, agent_info in network.agents_stopped.items() if agent_info[0]=='shelter_arrive'])
+        leave_cnts = len([agent_id for agent_id, agent_info in network.agents_stopped.items() if agent_info[0]=='leave'])
         if len(network.agents)==0:
             logging.info("all agents arrive at destinations")
             return 0
@@ -200,7 +217,7 @@ def one_step(t, data, config):
         neg_dist = 0 # count_vehicles_in_fire(t, vehicle_locations=veh_loc, fire_df=fire_df)
         ### arrival
         with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm),'a') as t_stats_outfile:
-            t_stats_outfile.write(",".join([str(x) for x in [t, arrival_cnts, shelter_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + "\n")
+            t_stats_outfile.write(",".join([str(x) for x in [t, arrival_cnts, shelter_cnts, leave_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + "\n")
         ### transfer
         with open(scratch_dir + simulation_outputs + '/transfer_stats/transfer_stats_{}.csv'.format(scen_nm), 'a') as transfer_stats_outfile:
             transfer_stats_outfile.write("{},".format(t) + ",".join([str(check_traffic_flow_links_dict[(il, ol)]) for (il, ol) in check_traffic_flow_links])+"\n")
@@ -221,7 +238,7 @@ def one_step(t, data, config):
     if t%100==0: 
         burnt_links = [link_id for link_id, link in network.links.items() if link.burnt=='burnt']
         closed_links = [link_id for link_id, link in network.links.items() if link.status=='closed']
-        logging.info(" ".join([str(i) for i in [t, arrival_cnts, shelter_cnts, move, '|', len(burnt_links), len(closed_links), '|', round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, round(t_agent_1-t_agent_0, 2), round(t_node_1-t_node_0, 2), round(t_link_1-t_link_0, 2)]]) + " " + str(len(veh_loc)))
+        logging.info(" ".join([str(i) for i in [t, arrival_cnts, shelter_cnts, leave_cnts, move, '|', len(burnt_links), len(closed_links), '|', round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, round(t_agent_1-t_agent_0, 2), round(t_node_1-t_node_0, 2), round(t_link_1-t_link_0, 2)]]) + " " + str(len(veh_loc)))
     return step_fitness, network
 
 def preparation(random_seed=None, vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2', scen_nm=None):
@@ -273,7 +290,7 @@ def preparation(random_seed=None, vphh_id='123', dept_id='2', clos_id='2', contr
     
     ### time step output
     with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
-        t_stats_outfile.write(",".join(['t', 'arr', 'shelter', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts'])+"\n")
+        t_stats_outfile.write(",".join(['t', 'arr', 'shelter', 'leave', 'move', 'avg_fdist', 'neg_fdist', 'out_evac_zone_cnts', 'out_evac_buffer_cnts'])+"\n")
     ### track the traffic flow from the following link pairs
     check_traffic_flow_links = [(29,33)]
     with open(scratch_dir + simulation_outputs + '/transfer_stats/transfer_stats_{}.csv'.format(
