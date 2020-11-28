@@ -42,10 +42,12 @@ class Node:
         self.status = None
 
     def create_virtual_node(self):
-        return Node('vn{}'.format(self.id), self.x+1, self.y+1, 'v')
+        return Node('vn{}'.format(self.id), self.x+0.001, self.y+0.001, 'v')
+        # return Node('vn{}'.format(self.id), self.x+1, self.y+1, 'v')
 
     def create_virtual_link(self):
-        return Link('n{}_vl'.format(self.id), 100, 0, 0, 100000, 'v', 'vn{}'.format(self.id), self.id, loads('LINESTRING({} {}, {} {})'.format(self.x+1, self.y+1, self.x, self.y)))
+        return Link('n{}_vl'.format(self.id), 100, 0, 0, 100000, 'v', 'vn{}'.format(self.id), self.id, loads('LINESTRING({} {}, {} {})'.format(self.x+0.001, self.y+0.001, self.x, self.y)))
+        # return Link('n{}_vl'.format(self.id), 100, 0, 0, 100000, 'v', 'vn{}'.format(self.id), self.id, loads('LINESTRING({} {}, {} {})'.format(self.x+1, self.y+1, self.x, self.y)))
     
     def calculate_straight_ahead_links(self):
         for il in self.in_links.keys():
@@ -341,7 +343,7 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     logger = logging.getLogger("bk_evac")
 
     links_df0 = pd.read_csv(work_dir + network_file_edges)
-    links_df0 = gpd.GeoDataFrame(links_df0, crs='epsg:4326', geometry=links_df0['geometry'].map(loads)).to_crs(3857)
+    links_df0 = gpd.GeoDataFrame(links_df0, crs='epsg:4326', geometry=links_df0['geometry'].map(loads))#.to_crs(3857)
     ### lane assumptions
     ### leave to OSM specified values for motorway and trunk
     links_df0['lanes'] = np.where(links_df0['type'].isin(['primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link']), 2, links_df0['lanes'])
@@ -372,7 +374,7 @@ def network(network_file_edges=None, network_file_nodes=None, simulation_outputs
     # sys.exit(0)
 
     nodes_df0 = pd.read_csv(work_dir + network_file_nodes)
-    nodes_df0 = gpd.GeoDataFrame(nodes_df0, crs='epsg:4326', geometry=[Point(xy) for xy in zip(nodes_df0['lon'], nodes_df0['lat'])]).to_crs(3857)
+    nodes_df0 = gpd.GeoDataFrame(nodes_df0, crs='epsg:4326', geometry=[Point(xy) for xy in zip(nodes_df0['lon'], nodes_df0['lat'])])#.to_crs(3857)
     nodes_df0['x'] = nodes_df0['geometry'].apply(lambda x: x.x)
     nodes_df0['y'] = nodes_df0['geometry'].apply(lambda x: x.y)
 
@@ -490,12 +492,14 @@ def route(scen_nm='', who=None):
     return t_odsp_1-t_odsp_0, len(map_agent)
 
 
-def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_pct=None, phase_tdiff=None, counterflow=None, transfer_s=None, transfer_e=None):
+def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_veh=None, reroute_pct=None, reroute_stp_id=None, phase_tdiff=None, counterflow=None, transfer_s=None, transfer_e=None):
     ### logging and global variables
     random.seed(random_seed)
     np.random.seed(random_seed)
     dept_time_dict = {'imm': [0,0,0,1000], 'fst': [20*60,10*60,10*60,30*60], 'mid': [40*60,20*60,20*60,60*60], 'slw': [60*60,30*60,30*60,90*60]}
     dept_time = dept_time_dict[dept_time_id]
+    reroute_stp_dict = {'0': 3600*10, '1': 3600, '2': 7200, '0.1': 3600*0.1, '0.5': 3600*0.5}
+    reroute_stp = reroute_stp_dict[reroute_stp_id]
     global g, agent_id_dict, node_id_dict, link_id_dict, node2link_dict
 
     global both_links, choose_spruce
@@ -529,7 +533,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     else:
         cf_files = []
 
-    scen_nm = 'crs3857_rs{}_f{}_dt{}_tow{}_hhv{}_r{}_pt{}_cf{}'.format(random_seed, fire_speed, dept_time_id, tow_pct, hh_veh, reroute_pct, phase_tdiff, counterflow)
+    scen_nm = 'reroute_stp_rs{}_f{}_dt{}_tow{}_hhv{}_r{}_rs{}_pt{}_cf{}'.format(random_seed, fire_speed, dept_time_id, tow_pct, hh_veh, reroute_pct, reroute_stp_id, phase_tdiff, counterflow)
     logger = logging.getLogger("bk_evac")
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
     logging.info(scen_nm)
@@ -552,8 +556,8 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     evacuation_zone_df = pd.read_csv(open(work_dir+'/projects/berkeley_trb/demand_inputs/manual_evacuation_zone.csv'))
     evacuation_zone_gdf = gpd.GeoDataFrame(evacuation_zone_df, crs='epsg:4326', geometry=evacuation_zone_df['geometry'].map(loads))
     evacuation_zone = evacuation_zone_gdf['geometry'].unary_union
-    # evacuation_buffer = evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).to_crs('epsg:4326').unary_union
-    evacuation_buffer = evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).unary_union
+    evacuation_buffer = evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).to_crs('epsg:4326').unary_union
+    # evacuation_buffer = evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).unary_union
     logging.info('Evacuation zone is {} km2, considering 1mile buffer it is {} km2'.format(evacuation_zone_gdf.to_crs('epsg:3857')['geometry'].unary_union.area/1e6, evacuation_zone_gdf.to_crs('epsg:3857').buffer(1609).unary_union.area/1e6))
 
     agents = demand(nodes_osmid_dict, dept_time=dept_time, demand_files = demand_files, tow_pct=tow_pct, phase_tdiff=phase_tdiff, reroute_pct=reroute_pct)
@@ -562,7 +566,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     ### fire growth
     fire_frontier = pd.read_csv(open(work_dir + '/projects/berkeley_trb/demand_inputs/fire_fitted_ellipse.csv'))
     fire_frontier['t'] = (fire_frontier['t']-900)/fire_speed ### suppose fire starts at 11.15am
-    fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads)).to_crs(3857)
+    fire_frontier = gpd.GeoDataFrame(fire_frontier, crs='epsg:4326', geometry=fire_frontier['geometry'].map(loads))#.to_crs(3857)
     
     t_s, t_e = 0, 3600*4+1
     ### time step output
@@ -572,7 +576,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     for t in range(t_s, t_e):
         move = 0
         ### routing
-        if (t==0) or (reroute_pct>0) and (t%reroute_freq == 0):
+        if (t==0) or (reroute_pct>0) and (t%reroute_freq == 0) and (t<reroute_stp):
             ### update link travel time
             for link_id, link in link_id_dict.items(): link.update_travel_time(t, link_time_lookback_freq)
             ### route
@@ -623,4 +627,4 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
         #     print(link_id_dict[20158].queue_veh, link_id_dict[20158].run_veh)
 
 if __name__ == "__main__":
-    main(random_seed=0, fire_speed=1, dept_time_id='mid', tow_pct=0.1, hh_veh='survey', reroute_pct=0.15, phase_tdiff=0, counterflow=1)
+    main(random_seed=0, fire_speed=1, dept_time_id='mid', tow_pct=0.1, hh_veh='survey', reroute_pct=0.15, reroute_stp_id='0', phase_tdiff=0, counterflow=1)
