@@ -208,12 +208,17 @@ class Link:
         self.travel_time = fft
         self.start_node = None
         self.end_node = None
+        self.gps_veh = 0
+        self.nongps_veh = 0
 
     def send_veh(self, t_now, agent_id):
         ### remove the agent from queue
         self.queue_veh = [v for v in self.queue_veh if v!=agent_id]
         self.ou_c = max(0, self.ou_c-1)
-        if self.type=='real': self.travel_time_list.append((t_now, t_now-agent_id_dict[agent_id].cl_enter_time))
+        if self.type=='real':
+            self.travel_time_list.append((t_now, t_now-agent_id_dict[agent_id].cl_enter_time))
+            if agent_id_dict[agent_id].gps_reroute == 1: self.gps_veh += 1
+            else: self.nongps_veh += 1
     
     def receive_veh(self, agent_id):
         self.run_veh.append(agent_id)
@@ -232,6 +237,10 @@ class Link:
         self.in_c, self.ou_c = self.capacity/3600, self.capacity/3600
     
     def update_travel_time(self, t_now, link_time_lookback_freq):
+        # if len(self.queue_veh) > 0:
+        #     travel_time_tmp = [t_now - agent_id_dict[agent_id].cl_enter_time for agent_id in self.queue_veh]
+        #     self.travel_time = sum(travel_time_tmp)/len(travel_time_tmp)
+        #     g.update_edge(self.start_nid+1, self.end_nid+1, c_double(self.travel_time))
         self.travel_time_list = [(t_rec, dur) for (t_rec, dur) in self.travel_time_list if (t_now-t_rec < link_time_lookback_freq)]
         if len(self.travel_time_list) > 0:
             travel_time_tmp = [dur for (_, dur) in self.travel_time_list]
@@ -498,7 +507,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     np.random.seed(random_seed)
     dept_time_dict = {'imm': [0,0,0,1000], 'fst': [20*60,10*60,10*60,30*60], 'mid': [40*60,20*60,20*60,60*60], 'slw': [60*60,30*60,30*60,90*60]}
     dept_time = dept_time_dict[dept_time_id]
-    reroute_stp_dict = {'0': 3600*10, '1': 3600, '2': 7200, '0.1': 3600*0.1, '0.5': 3600*0.5}
+    reroute_stp_dict = {'0': 3600*10, '1': 3600, '2': 7200, '0.1': 3600*0.1, '0.17': 600, '0.5': 3600*0.5}
     reroute_stp = reroute_stp_dict[reroute_stp_id]
     global g, agent_id_dict, node_id_dict, link_id_dict, node2link_dict
 
@@ -533,7 +542,7 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
     else:
         cf_files = []
 
-    scen_nm = 'reroute_stp_rs{}_f{}_dt{}_tow{}_hhv{}_r{}_rs{}_pt{}_cf{}'.format(random_seed, fire_speed, dept_time_id, tow_pct, hh_veh, reroute_pct, reroute_stp_id, phase_tdiff, counterflow)
+    scen_nm = 'link_gps_cnt_rs{}_f{}_dt{}_tow{}_hhv{}_r{}_rs{}_pt{}_cf{}'.format(random_seed, fire_speed, dept_time_id, tow_pct, hh_veh, reroute_pct, reroute_stp_id, phase_tdiff, counterflow)
     logger = logging.getLogger("bk_evac")
     logging.basicConfig(filename=scratch_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO)
     logging.info(scen_nm)
@@ -621,6 +630,10 @@ def main(random_seed=None, fire_speed=None, dept_time_id=None, tow_pct=None, hh_
             link_output[(link_output['q']>0) | (link_output['r']>0)].reset_index(drop=True).to_csv(scratch_dir + simulation_outputs + '/link_stats/link_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
             node_predepart = pd.DataFrame([(agent.cle, 1) for agent in agent_id_dict.values() if (agent.status in [None, 'loaded'])], columns=['node_id', 'predepart_cnt']).groupby('node_id').agg({'predepart_cnt': np.sum}).reset_index()
             node_predepart.to_csv(scratch_dir + simulation_outputs + '/node_stats/node_stats_{}_t{}.csv'.format(scen_nm, t), index=False)
+        
+        if t==t_e-10:
+            link_gps_pct = pd.DataFrame([(link.id, link.gps_veh, link.nongps_veh) for link in link_id_dict.values() if link.type=='real'], columns=['link_id', 'gps', 'non_gps'])
+            link_gps_pct.to_csv(scratch_dir + simulation_outputs + '/link_stats/link_gps_stats_{}.csv'.format(scen_nm), index=False)
 
         if t%100==0: 
             logging.info(" ".join([str(i) for i in [t, arrival_cnts, move, round(avg_fire_dist,2), neg_dist, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts]]) + " " + str(len(veh_loc)))

@@ -64,44 +64,48 @@ def link_model(t, network, links_raster, reroute_freq, link_closure_prob=None):
     # force to close these links at given time
     if t == 1800: ### pentz rd
         network.links[24838].close_link_to_newcomers(g=network.g)
-        network.links[24838].burnt = 'burnt'
+        network.links[24838].status = 'closed'
         network.links[24875].close_link_to_newcomers(g=network.g)
-        network.links[24875].burnt = 'burnt'
-    elif t == 3600: ### pentz rd
+        network.links[24875].status = 'closed'
+    elif t == 3600: ### neal rd
         network.links[3425].close_link_to_newcomers(g=network.g)
-        network.links[3425].burnt = 'burnt'
+        network.links[3425].status = 'closed'
         network.links[20912].close_link_to_newcomers(g=network.g)
-        network.links[20912].burnt = 'burnt'
-    elif t == 10800: ### pentz rd
+        network.links[20912].status = 'closed'
+    elif t == 10800: ### clark rd
         network.links[9012].close_link_to_newcomers(g=network.g)
-        network.links[9012].burnt = 'burnt'
+        network.links[9012].status = 'closed'
         network.links[14363].close_link_to_newcomers(g=network.g)
-        network.links[14363].burnt = 'burnt'
+        network.links[14363].status = 'closed'
     else:
         pass
     
+    # run link model; close and open links due to fire
     for link_id, link in network.links.items(): 
+        ### link status: open (initial); closed (forever closed); burning (on fire but not closed); burning_closed (on fire and closed); burnt_over (fire moved over and will not be on fire again         )
         link.run_link_model(t, agent_id_dict=network.agents)
-        if link.link_type == 'v': ### do not track the link time of virtual links
-            link.travel_time_list = []
-            pass
-        else:
-            link.travel_time_list = []
-            if (t+1)%reroute_freq==0: link.update_travel_time_by_queue_length(network.g, len(link.queue_vehicles))
 
-        # raster fire intersection
-        if (link.link_type!='v') and (link.link_id in links_in_fire) and (link.burnt == 'not_yet'):
-            if (link.link_type in ['residential', 'unclassified']) and (np.random.uniform(0,1) < link_closure_prob):
+        ### raster fire intersection: only close residential and unclassified roads. no harm to virtual links or higher class links.
+        if (link.link_id in links_in_fire) and (link.status == 'open') and (link.link_type in ['residential', 'unclassified']):
+            link.status = 'burning'
+            if (np.random.uniform(0,1) < link_closure_prob):
                 link.close_link_to_newcomers(t, g=network.g)
-                # print(link.link_id)
-            link.burnt = 'burnt'
-        else: pass
-        if (link.status=='open') and (link.burnt=='burnt') and (link.burnt_time is not None) and (t-link.burnt_time>1800):
-            link.burnt='burnt_over'
+                link.status = 'burning_closed'
+                link.burnt_time = t
+        
+        ### reopen some links
+        if (link.status in ['burning', 'burning_closed']) and (t-link.burnt_time>1800):
+            link.status='burnt_over'
+            if link.status == 'burning_closed':
+                link.open_link_to_newcomers(t, g=network.g)
+
     return network
 
 def node_model(t, network, move, check_traffic_flow_links_dict, special_nodes=None):
+    # only run node model for those with vehicles waiting
     node_ids_to_run = set([link.end_nid for link in network.links.values() if len(link.queue_vehicles)>0])
+
+    # run node model
     for node_id in node_ids_to_run:
         node = network.nodes[node_id] 
         n_t_move, transfer_links, agent_update_dict, link_update_dict = node.run_node_model(t, node_id_dict=network.nodes, link_id_dict=network.links, agent_id_dict=network.agents, node2link_dict=network.node2link_dict, special_nodes=special_nodes)
@@ -149,6 +153,11 @@ def one_step(t, data, config):
     step_fitness = None
     ### agent model
     t_agent_0 = time.time()
+    ### update link travel time before rerouting
+    if (t%reroute_freq==0):
+        for link in network.links.items():
+            link.update_travel_time_by_queue_length(network.g)
+
     for agent_id, agent in network.agents.items():
         if (agent.status == 'shelter') or (agent.status == 'leave'):
             continue

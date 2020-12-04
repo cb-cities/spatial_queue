@@ -381,10 +381,10 @@ class Link:
         self.end_node = None
         ### fire related
         self.status = 'open'
-        self.burnt = 'not_yet'
-        self.burnt_time = None
-        self.fire_time = None
-        self.fire_type = None
+        # self.burnt = 'not_yet'
+        self.burnt_time = 3600*100
+        # self.fire_time = None
+        # self.fire_type = None
 
     # @profile
     def run_link_model(self, t_now, agent_id_dict=None):
@@ -399,21 +399,24 @@ class Link:
         self.remaining_inflow_capacity, self.remaining_outflow_capacity = self.capacity/3600, self.capacity/3600
         if self.status=='closed': self.remaining_inflow_capacity = 0
     
-    def update_travel_time(self, t_now, link_time_lookback_freq=None, g=None, update_graph=False):
-        self.travel_time_list = [(t_rec, duration) for (t_rec, duration) in self.travel_time_list if (t_now-t_rec < link_time_lookback_freq)]
-        if len(self.travel_time_list) > 0:
-            self.travel_time = np.mean([dururation for (_, dururation) in self.travel_time_list])
-            if update_graph: g.update_edge(self.start_nid, self.end_nid, c_double(self.travel_time))
+    # def update_travel_time(self, t_now, link_time_lookback_freq=None, g=None, update_graph=False):
+    #     self.travel_time_list = [(t_rec, duration) for (t_rec, duration) in self.travel_time_list if (t_now-t_rec < link_time_lookback_freq)]
+    #     if len(self.travel_time_list) > 0:
+    #         self.travel_time = np.mean([dururation for (_, dururation) in self.travel_time_list])
+    #         if update_graph: g.update_edge(self.start_nid, self.end_nid, c_double(self.travel_time))
    
-    def update_travel_time_by_queue_length(self, g, queue_length):
-        if self.status == 'closed': return
-        estimated_travel_time = queue_length/self.capacity * 3600 + self.fft
+    def update_travel_time_by_queue_length(self, g):
+        if (self.status == 'closed') or (self.type == 'v'): return
+        estimated_travel_time = len(self.queue_vehicles) / self.capacity * 3600 + self.fft
         g.update_edge(self.start_nid, self.end_nid, c_double(estimated_travel_time))
 
     def close_link_to_newcomers(self, g=None):
         g.update_edge(self.start_nid, self.end_nid, c_double(1e8))
-        self.status = 'closed'
+        # self.status = 'closed'
         ### not updating fft and ou_c because current vehicles need to leave
+
+    def open_link_to_newcomers(self, g=None):
+        g.update_edge(self.start_nid, self.end_nid, self.fft)
 
 class Agent:
     def __init__(self, agent_id, origin_nid, destin_nid, deptarture_time, vehicle_length, gps_reroute):
