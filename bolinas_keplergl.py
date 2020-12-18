@@ -1,5 +1,5 @@
 from keplergl import KeplerGl
-import model.dta_meso_butte as dta_meso
+import model.dta_meso_bolinas3 as dta_meso
 
 import json
 import pandas as pd 
@@ -87,7 +87,7 @@ def make_map(network):
     run_vehicle_position_gdf = make_gdf(run_vehicle_position)
     closed_link_gdf = add_closed_links(closed_link_position)
     # make map
-    with open('keplergl_config.json') as jsonfile:
+    with open('bolinas_keplergl_config.json') as jsonfile:
         map_config = json.load(jsonfile)
     map_vehicles = KeplerGl(height=400, config=map_config)
     # map_vehicles = KeplerGl(height=400)
@@ -96,21 +96,24 @@ def make_map(network):
     map_vehicles.add_data(data=closed_link_gdf, name='closed_links')
     return map_vehicles
 
-def main(vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2'):
+def main(random_seed=0, fire_id=1, comm_id=0, vphh=2, visitor_cnts=300, contra_id='0', wait_time=1, link_closed_time=0):
     # preparation
-    scen_nm = "v{}_d{}_cl{}_ct{}_ru{}".format(vphh_id, dept_id, clos_id, contra_id, rout_id)
-    data, config = dta_meso.preparation(random_seed=0, vphh_id=vphh_id, dept_id=dept_id, clos_id=clos_id, contra_id=contra_id, rout_id=rout_id, scen_nm=scen_nm)
+    scen_nm = "r{}_fire{}_comm{}_vphh{}_vistor{}_contra{}_wait{}_close{}".format(random_seed, fire_id, comm_id, vphh, visitor_cnts, contra_id, wait_time, link_closed_time)
+    data, config = dta_meso.preparation(random_seed=0, fire_id=fire_id, comm_id=comm_id, vphh=vphh, visitor_cnts=visitor_cnts, contra_id=contra_id, wait_time=wait_time, link_closed_time=link_closed_time, scen_nm=scen_nm)
 
     fitness=0
-    visualization_t_list = {300, 1200, 2400, 3600, 5400, 7200, 10800, 3600*4, 3600*5, 3600*6}
+    visualization_t_list = {300, 1200, 2400, 3600, 5400, 7200, 10800, 3600*4, 3600*5}
+    in_fire_dict = dict()
     for t in range(0, 36001):
-        step_fitness, network = dta_meso.one_step(t, data, config)
+        step_fitness, network, status, in_fire_dict = dta_meso.one_step(t, data, config, in_fire_dict)
         if step_fitness is not None:
             fitness += step_fitness
         if t in visualization_t_list:
             # visualization_t_dict[t] = make_map(network)
             map = make_map(network)
-            map.save_to_html(file_name="projects/butte_osmnx/visualization_outputs/map_{}_{}.html".format(scen_nm, t))
+            map.save_to_html(file_name="projects/bolinas/visualization_outputs/map_{}_{}.html".format(scen_nm, t))
+        if status == 'stop':
+            sys.exit(0)
 
 if __name__ == "__main__":
-    main(vphh_id='123', dept_id='2', contra_id='4')
+    main(fire_id=2)

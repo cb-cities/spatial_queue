@@ -35,7 +35,7 @@ class Network:
         self.agents = {}
         self.agents_stopped = {}
     
-    def dataframe_to_network(self, network_file_edges=None, network_file_nodes=None, cf_files = None, special_nodes=None):
+    def dataframe_to_network(self, project_location=None, network_file_edges=None, network_file_nodes=None, cf_files = None, special_nodes=None, scen_nm=None):
         
         # nodes
         nodes_df = pd.read_csv(home_dir + network_file_nodes)
@@ -45,79 +45,90 @@ class Network:
         nodes_df = nodes_df[['nid', 'x', 'y', 'osmid']]
         # edges
         links_df = pd.read_csv(home_dir + network_file_edges)
+        # print(links_df[links_df['lanes']==0])
+        # sys.exit(0)
         if len(cf_files)>0:
             for cf_file in cf_files:
-                contraflow_links_df = pd.read_csv(home_dir + cf_file)
+                try:
+                    contraflow_links_df = pd.read_csv(home_dir + cf_file)
+                except:
+                    print(home_dir+cf_file)
                 contraflow_links_df['new_lanes'] = contraflow_links_df['lanes']
+                # print(contraflow_links_df[contraflow_links_df['new_lanes']==0])
                 links_df = links_df.merge(contraflow_links_df[['nid_s', 'nid_e', 'new_lanes']], how='left', on=['nid_s', 'nid_e'])
                 links_df['lanes'] = np.where(np.isnan(links_df['new_lanes']), links_df['lanes'], links_df['new_lanes'])
 
+        links_df['maxmph'] = np.where(links_df['lanes']==0, 0.00000001, links_df['maxmph'])
         links_df['fft'] = links_df['length']/links_df['maxmph']*2.237
         links_df['capacity'] = 1900*links_df['lanes']
+        # print(links_df[links_df['lanes']==0])
+        # sys.exit(0)
         links_df['capacity'] = np.where(links_df['capacity']==0, 0.01, links_df['capacity'])
         links_df = gpd.GeoDataFrame(links_df, crs='epsg:4326', geometry=links_df['geometry'].map(loads)).to_crs('epsg:26910')
-        links_df = links_df[['eid', 'nid_s', 'nid_e', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
-        # links_df0.to_csv(scratch_dir + simulation_outputs + '/modified_network_edges.csv', index=False)
+        links_df = links_df[['eid', 'nid_s', 'nid_e', 'type', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
+        links_df.to_csv(home_dir + project_location + '/simulation_outputs/network/modified_network_edges_{}.csv'.format(scen_nm), index=False)
         
         ### link closure
         for closure_link in special_nodes['closure']:
             links_df.loc[links_df['eid']==closure_link, 'fft'] = 1e8
-            links_df.loc[links_df['eid']==closure_link, 'maxmph'] = 0.0000001
+            links_df.loc[links_df['eid']==closure_link, 'maxmph'] = 0.00000001
 
         ### turn restrictions
-        new_nodes = []
-        new_links = []
-        new_node_id = nodes_df.shape[0]
-        new_link_id = links_df.shape[0]
-        for prohibit_node, prohibit_turns in special_nodes['prohibition'].items():
-            # node to be removed
-            prohibit_node = int(prohibit_node)
-            # temporarily holding new nodes
-            tmp_start_nodes = []
-            tmp_end_nodes = []
-            for row in links_df.loc[links_df['nid_s']==prohibit_node].itertuples():
-                links_df.loc[links_df['eid']==getattr(row, 'eid'), 'nid_s'] = new_node_id
-                tmp_point = getattr(row, 'geometry').interpolate(0.1, normalized=True)
-                links_df.loc[links_df['eid']==getattr(row, 'eid'), 'geometry'] = list(split(getattr(row, 'geometry'), tmp_point.buffer(1)))[2]
-                [tmp_x, tmp_y] = list(tmp_point.coords)[0]
-                tmp_start_nodes.append([new_node_id, tmp_x, tmp_y, 'n{}_l{}'.format(prohibit_node, getattr(row, 'eid')), getattr(row, 'eid')])
-                new_node_id += 1
-            for row in links_df.loc[links_df['nid_e']==prohibit_node].itertuples():
-                links_df.loc[links_df['eid']==getattr(row, 'eid'), 'nid_e'] = new_node_id
-                tmp_point = getattr(row, 'geometry').interpolate(0.9, normalized=True)
-                links_df.loc[links_df['eid']==getattr(row, 'eid'), 'geometry'] = list(split(getattr(row, 'geometry'), tmp_point.buffer(1)))[0]
-                [tmp_x, tmp_y] = list(tmp_point.coords)[0]
-                tmp_end_nodes.append([new_node_id, tmp_x, tmp_y, 'n{}_l{}'.format(prohibit_node, getattr(row, 'eid')), getattr(row, 'eid')])
-                new_node_id += 1
-            new_nodes += tmp_start_nodes
-            new_nodes += tmp_end_nodes
-            # prohibit turns
-            # print(prohibit_turns)
-            # print(tmp_start_nodes)
-            # print(tmp_end_nodes)
-            prohibit_turns = [(inlink, outlink) for [inlink, outlink] in prohibit_turns]
-            for start_node in tmp_end_nodes:
-                for end_node in tmp_start_nodes:
-                    if (start_node[-1], end_node[-1]) not in prohibit_turns:
-                        print((start_node[-1], end_node[-1]), prohibit_turns)
-                        new_links.append([new_link_id, start_node[0], end_node[0], start_node[1], start_node[2], end_node[1], end_node[2]])
-                        new_link_id += 1
-        new_links_df = pd.DataFrame(new_links, columns=['eid','nid_s', 'nid_e', 'start_x', 'start_y', 'end_x', 'end_y'])
-        new_links_df['lanes'] = 100
-        new_links_df['capacity'] = 100000
-        new_links_df['maxmph'] = 100000
-        new_links_df['fft'] = 0
-        new_links_df['length'] = 0
-        new_links_df['geometry'] = new_links_df.apply(lambda x: LineString([[x['start_x'], x['start_y']], [x['end_x'], x['end_y']]]), axis=1)
-        new_links_df = new_links_df[['eid', 'nid_s', 'nid_e', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
-        links_df = pd.concat([links_df, new_links_df])
-        # new nodes
-        new_nodes_df = pd.DataFrame(new_nodes, columns=['nid', 'x', 'y', 'osmid', 'link'])
-        print(nodes_df.shape, new_nodes_df.shape)
-        nodes_df = pd.concat([nodes_df, new_nodes_df[['nid', 'x', 'y', 'osmid']]])
-        print(nodes_df.shape)
-        nodes_df.to_csv('nodes.csv', index=False)
-        links_df.to_csv('links.csv', index=False)
+        if len(special_nodes['prohibition'].keys())==0: pass
+        else:
+            new_nodes = []
+            new_links = []
+            new_node_id = nodes_df.shape[0]
+            new_link_id = links_df.shape[0]
+            for prohibit_node, prohibit_turns in special_nodes['prohibition'].items():
+                # node to be removed
+                prohibit_node = int(prohibit_node)
+                # temporarily holding new nodes
+                tmp_start_nodes = []
+                tmp_end_nodes = []
+                for row in links_df.loc[links_df['nid_s']==prohibit_node].itertuples():
+                    links_df.loc[links_df['eid']==getattr(row, 'eid'), 'nid_s'] = new_node_id
+                    tmp_point = getattr(row, 'geometry').interpolate(0.1, normalized=True)
+                    links_df.loc[links_df['eid']==getattr(row, 'eid'), 'geometry'] = list(split(getattr(row, 'geometry'), tmp_point.buffer(1)))[2]
+                    [tmp_x, tmp_y] = list(tmp_point.coords)[0]
+                    tmp_start_nodes.append([new_node_id, tmp_x, tmp_y, 'n{}_l{}'.format(prohibit_node, getattr(row, 'eid')), getattr(row, 'eid')])
+                    new_node_id += 1
+                for row in links_df.loc[links_df['nid_e']==prohibit_node].itertuples():
+                    links_df.loc[links_df['eid']==getattr(row, 'eid'), 'nid_e'] = new_node_id
+                    tmp_point = getattr(row, 'geometry').interpolate(0.9, normalized=True)
+                    links_df.loc[links_df['eid']==getattr(row, 'eid'), 'geometry'] = list(split(getattr(row, 'geometry'), tmp_point.buffer(1)))[0]
+                    [tmp_x, tmp_y] = list(tmp_point.coords)[0]
+                    tmp_end_nodes.append([new_node_id, tmp_x, tmp_y, 'n{}_l{}'.format(prohibit_node, getattr(row, 'eid')), getattr(row, 'eid')])
+                    new_node_id += 1
+                new_nodes += tmp_start_nodes
+                new_nodes += tmp_end_nodes
+                # prohibit turns
+                # print(prohibit_turns)
+                # print(tmp_start_nodes)
+                # print(tmp_end_nodes)
+                prohibit_turns = [(inlink, outlink) for [inlink, outlink] in prohibit_turns]
+                for start_node in tmp_end_nodes:
+                    for end_node in tmp_start_nodes:
+                        if (start_node[-1], end_node[-1]) not in prohibit_turns:
+                            print((start_node[-1], end_node[-1]), prohibit_turns)
+                            new_links.append([new_link_id, start_node[0], end_node[0], start_node[1], start_node[2], end_node[1], end_node[2]])
+                            new_link_id += 1
+            new_links_df = pd.DataFrame(new_links, columns=['eid','nid_s', 'nid_e', 'start_x', 'start_y', 'end_x', 'end_y'])
+            new_links_df['lanes'] = 100
+            new_links_df['capacity'] = 100000
+            new_links_df['maxmph'] = 100000
+            new_links_df['fft'] = 0
+            new_links_df['length'] = 0
+            new_links_df['geometry'] = new_links_df.apply(lambda x: LineString([[x['start_x'], x['start_y']], [x['end_x'], x['end_y']]]), axis=1)
+            new_links_df = new_links_df[['eid', 'nid_s', 'nid_e', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
+            links_df = pd.concat([links_df, new_links_df])
+            # new nodes
+            new_nodes_df = pd.DataFrame(new_nodes, columns=['nid', 'x', 'y', 'osmid', 'link'])
+            print(nodes_df.shape, new_nodes_df.shape)
+            nodes_df = pd.concat([nodes_df, new_nodes_df[['nid', 'x', 'y', 'osmid']]])
+            print(nodes_df.shape)
+            nodes_df.to_csv('nodes.csv', index=False)
+            links_df.to_csv('links.csv', index=False)
 
         ### Convert to mtx
         self.g = interface.from_dataframe(links_df, 'nid_s', 'nid_e', 'fft')
@@ -133,7 +144,7 @@ class Network:
             self.links[virtual_link.link_id] = virtual_link
             self.node2link_dict[(virtual_link.start_nid, virtual_link.end_nid)] = virtual_link.link_id
         for row in links_df.itertuples():
-            real_link = Link(getattr(row, 'eid'), getattr(row, 'lanes'), getattr(row, 'length'), getattr(row, 'fft'), getattr(row, 'capacity'), 'real', getattr(row, 'nid_s'), getattr(row, 'nid_e'), getattr(row, 'geometry'))
+            real_link = Link(getattr(row, 'eid'), getattr(row, 'lanes'), getattr(row, 'length'), getattr(row, 'fft'), getattr(row, 'capacity'), getattr(row, 'type'), getattr(row, 'nid_s'), getattr(row, 'nid_e'), getattr(row, 'geometry'))
             self.links[real_link.link_id] = real_link
             self.node2link_dict[(real_link.start_nid, real_link.end_nid)] = real_link.link_id
 
@@ -170,13 +181,15 @@ class Network:
             od['veh_len'] = np.random.choice([8, 18], size=od.shape[0], p=[1-tow_pct, tow_pct])
             ### assign rerouting choice
             od['gps_reroute'] = np.random.choice([0, 1], size=od.shape[0], p=[1-reroute_pct, reroute_pct])
+            ### assign vehicle type
+            if 'type' not in od.columns: od['type'] = None
             all_od_list.append(od)
         all_od = pd.concat(all_od_list, sort=False, ignore_index=True)
         all_od = all_od.sample(frac=1).reset_index(drop=True) ### randomly shuffle rows
         print('# agents from file ', all_od.shape[0])
         # all_od = all_od.iloc[0:3000].copy()
         for row in all_od.itertuples():
-            self.agents[getattr(row, 'agent_id')] = Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len'), getattr(row, 'gps_reroute')) 
+            self.agents[getattr(row, 'agent_id')] = Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len'), getattr(row, 'gps_reroute'), getattr(row, 'type')) 
 
 class Node:
     def __init__(self, node_id, x, y, node_type, osmid=None):
@@ -186,11 +199,12 @@ class Node:
         self.node_type = node_type
         self.osmid = osmid
         ### derived
-        self.all_queues = {}
+        # self.all_queues = {}
         self.incoming_links = {} ### {in_link_id: straight_ahead_out_link_id, ...}
         self.outgoing_links = []
-        self.go_vehs = [] ### veh that moves in this time step
+        # self.go_vehs = [] ### veh that moves in this time step
         self.status = None
+        self.node_move = 0
 
     def create_virtual_node(self):
         return Node('vn{}'.format(self.node_id), self.x+1, self.y+1, 'v')
@@ -198,21 +212,23 @@ class Node:
     def create_virtual_link(self):
         return Link('n{}_vl'.format(self.node_id), 100, 0, 0, 100000, 'v', 'vn{}'.format(self.node_id), self.node_id, loads('LINESTRING({} {}, {} {})'.format(self.x+1, self.y+1, self.x, self.y)))
     
-    def non_conflict_vehicles(self, link_id_dict=None, agent_id_dict=None, node2link_dict=None, special_nodes=None):
+    def non_conflict_vehicles(self, t_now, link_id_dict=None, agent_id_dict=None, node2link_dict=None, special_nodes=None):
         non_conflict_go_vehicles = []
         left_turn_phase = False
         # all potential links
         incoming_links = [l for l in self.incoming_links.keys() if len(link_id_dict[l].queue_vehicles)>0]
         shuffle(incoming_links)
-        if self.node_id in special_nodes['signal'].keys():
-            if t%60<30: incoming_links = [l for l in incoming_links if l in special_nodes['signal']['{}'.format(self.node_id)]['phase_1']]
+        # filter based on signal and priority
+        if str(self.node_id) in special_nodes['signal'].keys():
+            if t_now%60<30: incoming_links = [l for l in incoming_links if l in special_nodes['signal']['{}'.format(self.node_id)]['phase_1']]
             else: incoming_links = [l for l in incoming_links if l in special_nodes['signal']['{}'.format(self.node_id)]['phase_2']]
             shuffle(incoming_links)
-        elif self.node_id in special_nodes['priority'].keys():
+        elif str(self.node_id) in special_nodes['priority'].keys(): ### priority list
             incoming_links = [l for l in special_nodes['priority']['{}'.format(self.node_id)] if l in incoming_links]
-        # no queuing vehicle at the intersection
+        # after filtering, if no queuing vehicle at the intersection
         if (incoming_links == None): return []
         if (len(incoming_links) == 0): return []
+        
         # one primary direction
         go_link = link_id_dict[incoming_links[0]]
         # vehicles from primary direction
@@ -220,6 +236,7 @@ class Node:
         incoming_vehs = len(go_link.queue_vehicles)
         for lane in range(min(incoming_lanes, incoming_vehs)):
             agent_id = go_link.queue_vehicles[lane]
+            # if agent_id == 79: print('ahead 79')
             agent_incoming_link = go_link.link_id
             # agent_id_dict[agent_id].find_next_link(node2link_dict=node2link_dict)
             agent_outgoing_link = agent_id_dict[agent_id].next_link
@@ -235,6 +252,9 @@ class Node:
                 if turning_angle>=50: left_turn_phase=True
         # the chosen vehicle decides it is left turn phase
         if left_turn_phase: return non_conflict_go_vehicles
+        ### remove primary direction from future consideration, as sometimes there is only one incoming link and it was also selected as the non-conflict going link
+        incoming_links = [link for link in incoming_links if link!=go_link.link_id]
+        if (len(incoming_links) == 0): return non_conflict_go_vehicles
 
         # straight-ahead and right-turn phase
         try:
@@ -249,105 +269,118 @@ class Node:
         incoming_vehs = len(opposite_go_link.queue_vehicles)
         for lane in range(min(incoming_lanes, incoming_vehs)):
             agent_id = opposite_go_link.queue_vehicles[lane]
+            # if agent_id == 79:
+            #     print('reverse 79')
+            #     print(go_link.link_id, go_link_reverse, [(x, self.incoming_links[x][go_link_reverse]) for x in incoming_links])
             agent_incoming_link = opposite_go_link.link_id
             agent_outgoing_link = agent_id_dict[agent_id].next_link
             # opposite direction will not have more left turns
-            if agent_outgoing_link is None: turning_angle = 0
-            else: turning_angle = self.incoming_links[agent_incoming_link][agent_outgoing_link]
-            if turning_angle>=50: continue
+            if agent_outgoing_link is None: pass
+            else:
+                turning_angle = self.incoming_links[agent_incoming_link][agent_outgoing_link]
+                if turning_angle>=50: continue
             non_conflict_go_vehicles.append([agent_id, agent_incoming_link, agent_outgoing_link])
+        # for [a,b,c] in non_conflict_go_vehicles:
+        #     if a==79: print('go_veh', self.node_id, a, b, c, agent_id_dict[a].this_link)
         return non_conflict_go_vehicles
 
     def run_node_model(self, t_now, node_id_dict=None, link_id_dict=None, agent_id_dict=None, node2link_dict=None, transfer_link_pairs=None, special_nodes=None):
-        go_vehicles = self.non_conflict_vehicles( link_id_dict=link_id_dict, agent_id_dict=agent_id_dict, node2link_dict=node2link_dict, special_nodes=special_nodes)
+        go_vehicles = self.non_conflict_vehicles( t_now, link_id_dict=link_id_dict, agent_id_dict=agent_id_dict, node2link_dict=node2link_dict, special_nodes=special_nodes)
         # if self.node_id==8205: print(go_vehicles, '\n\n')
         node_move = 0
         node_move_link_pairs = []
-        ### hold subprocess results, avoid writing directly to global variable
-        agent_update_dict = dict()
-        link_update_dict = dict()
-        all_incoming_links = set([v[1] for v in go_vehicles])
-        all_outgoing_links = set([v[2] for v in go_vehicles])
-        for il_id in all_incoming_links:
-            il = link_id_dict[il_id]
-            link_update_dict[il_id] = ['inflow', il.queue_vehicles, il.remaining_outflow_capacity, il.travel_time_list]
-        for ol_id in all_outgoing_links:
-            try:
-                ol = link_id_dict[ol_id]
-                link_update_dict[ol_id] = ['outflow', ol.run_vehicles, ol.remaining_inflow_capacity, ol.remaining_storage_capacity]
-            except KeyError: ### ol_id is None
-                pass
 
         for [agent_id, agent_il_id, agent_ol_id] in go_vehicles:
-            # if agent_id==1627:
-            #     # pass
-            #     print('1627')
             agent = agent_id_dict[agent_id]
-            ### link traversal time if the agent can pass
             travel_time = (t_now, t_now - agent.current_link_enter_time)
-            ### track status of inflow link in the current iteration
-            [_, inflow_link_queue_veh, inflow_link_ou_c, inflow_link_travel_time_list] = link_update_dict[agent_il_id]
-            ### track status of outflow link in the current iteration
+            agent_inflow_link = link_id_dict[agent_il_id]
             try:
-                [_, outflow_link_run_veh, outflow_link_in_c, outflow_link_st_c] = link_update_dict[agent_ol_id]
-            except KeyError: # agent_ol_id is None
-                # print(agent_id, agent_ol_id, self.node_id, agent.origin_nid, agent.destin_nid, agent.route)
-                # sys.exit(0)
-                outflow_link_st_c = None
+                agent_outflow_link = link_id_dict[agent_ol_id]
+            except KeyError:
+                agent_outflow_link = None
+                if self.node_id != agent.destin_nid:
+                    print(agent_id, agent_il_id, agent_ol_id, agent.destin_nid, self.node_id, agent.status, agent.route)
+                    sys.exit(0)
+
+            # try: agent_outflow_link.remaining_storage_capacity
+            # except AttributeError: print(agent_id, agent_outflow_link, agent_inflow_link.link_id)
 
             ### arrival
-            if self.node_id in [agent.destin_nid, agent.furthest_nid]:
+            # if self.node_id in [agent.destin_nid, agent.furthest_nid]:
+            if self.node_id == agent.destin_nid:
                 node_move += 1
                 node_move_link_pairs.append((agent_il_id, agent_ol_id))
-                ### before move agent as it uses the old agent.cl_enter_time
-                link_update_dict[agent_il_id] = [
-                    'inflow', [v for v in inflow_link_queue_veh if v != agent_id], max(0, inflow_link_ou_c - 1), inflow_link_travel_time_list+[travel_time]]
-                if (agent.status=='shelter'):
-                    agent_update_dict[agent_id] = ['shelter_arrive', self.node_id, None, t_now]
-                else:
-                    agent_update_dict[agent_id] = ['arrive', self.node_id, None, t_now]
+                agent_inflow_link.total_vehicles_left += 1
+                agent_inflow_link.queue_vehicles = [v for v in agent_inflow_link.queue_vehicles if v!=agent_id]
+                agent_inflow_link.remaining_outflow_capacity = max(0, agent_inflow_link.remaining_outflow_capacity-1)
+                agent_inflow_link.travel_time_list.append(travel_time)
+                agent.status = 'arrive'
+                # if agent.status in ['shelter_p']: agent.status = 'shelter_p_arrive'
+                # elif agent.status in ['shelter_a']: agent.status = 'shelter_a_arrive'
+                # else: agent.status = 'arrive'
             ### no storage capacity downstream
-            elif outflow_link_st_c is None:
-                print(agent_id, agent_ol_id, self.node_id, agent.origin_nid, agent.destin_nid, agent.route)
-                sys.exit(0)
-            elif outflow_link_st_c < agent.vehicle_length:
+            elif agent_outflow_link.remaining_storage_capacity < agent.vehicle_length:
                 pass ### no blocking, as # veh = # lanes
             ### inlink-sending, outlink-receiving both permits
-            elif (inflow_link_ou_c >= 1) & (outflow_link_in_c >= 1):
+            elif (agent_inflow_link.remaining_outflow_capacity >= 1) & (agent_outflow_link.remaining_inflow_capacity >= 1):
                 node_move += 1
                 node_move_link_pairs.append((agent_il_id, agent_ol_id))
                 ### before move agent as it uses the old agent.cl_enter_time
-                link_update_dict[agent_il_id] = [ 
-                    'inflow', [v for v in inflow_link_queue_veh if v != agent_id], max(0, inflow_link_ou_c - 1), inflow_link_travel_time_list+[travel_time]]
-                link_update_dict[agent_ol_id] = [
-                    'outflow', outflow_link_run_veh + [agent_id], max(0, outflow_link_in_c - 1), outflow_link_st_c-agent.vehicle_length]
-                agent_update_dict[agent_id] = ['enroute', self.node_id, agent.next_link_end_nid, t_now]
+                agent_inflow_link.total_vehicles_left += 1
+                # if (t_now>3600) and (agent_inflow_link.link_id == 543):
+                #     print(agent_id, agent.origin_nid)
+                agent_inflow_link.queue_vehicles = [v for v in agent_inflow_link.queue_vehicles if v!=agent_id]
+                agent_inflow_link.remaining_outflow_capacity = max(0, agent_inflow_link.remaining_outflow_capacity-1)
+                agent_inflow_link.travel_time_list.append(travel_time)
+                agent_outflow_link.run_vehicles.append(agent_id)
+                agent_outflow_link.remaining_inflow_capacity = max(0, agent_outflow_link.remaining_inflow_capacity-1)
+                agent_outflow_link.remaining_storage_capacity -= agent.vehicle_length
+                agent.move_agent_to_next_link(transfer_node=self.node_id, t_now=t_now, node2link_dict=node2link_dict)
+                # agent.current_link_start_nid = self.node_id
+                # agent.current_link_end_nid = agent.next_link_end_nid
+                # agent.current_link_enter_time = t_now
+                # try:
+                #     agent.find_next_link(node2link_dict = node2link_dict)
+                # except KeyError:
+                #     print(agent.agent_id, agent.this_link, self.node_id, agent_inflow_link.link_id, agent_outflow_link.link_id)
             ### either inlink-sending or outlink-receiving or both exhaust
             else:
-                control_cap = min(inflow_link_ou_c, outflow_link_in_c)
+                control_cap = min(agent_inflow_link.remaining_outflow_capacity, agent_outflow_link.remaining_inflow_capacity)
                 toss_coin = random.choices([0,1], weights=[1-control_cap, control_cap], k=1)
                 if toss_coin[0]: ### vehicle can move
                     node_move += 1
                     node_move_link_pairs.append((agent_il_id, agent_ol_id))
                     ### before move agent as it uses the old agent.cl_enter_time
-                    link_update_dict[agent_il_id] = [ 
-                        'inflow', [v for v in inflow_link_queue_veh if v != agent_id], max(0, inflow_link_ou_c - 1), inflow_link_travel_time_list+[travel_time]]
-                    link_update_dict[agent_ol_id] = [
-                        'outflow', outflow_link_run_veh + [agent_id], max(0, outflow_link_in_c - 1), outflow_link_st_c-agent.vehicle_length]
-                    agent_update_dict[agent_id] = ['enroute', self.node_id, agent.next_link_end_nid, t_now]
+                    agent_inflow_link.total_vehicles_left += 1
+                    # if (t_now>3600) and (agent_inflow_link.link_id == 543):
+                    #     print(agent_id, agent.origin_nid)
+                    agent_inflow_link.queue_vehicles = [v for v in agent_inflow_link.queue_vehicles if v!=agent_id]
+                    agent_inflow_link.remaining_outflow_capacity = max(0, agent_inflow_link.remaining_outflow_capacity-1)
+                    agent_inflow_link.travel_time_list.append(travel_time)
+                    agent_outflow_link.run_vehicles.append(agent_id)
+                    agent_outflow_link.remaining_inflow_capacity = max(0, agent_outflow_link.remaining_inflow_capacity-1)
+                    agent_outflow_link.remaining_storage_capacity -= agent.vehicle_length
+                    agent.move_agent_to_next_link(transfer_node=self.node_id, t_now=t_now, node2link_dict=node2link_dict)
+                    # agent.current_link_start_nid = self.node_id
+                    # agent.current_link_end_nid = agent.next_link_end_nid
+                    # agent.current_link_enter_time = t_now
+                    # agent.find_next_link(node2link_dict = node2link_dict)
                 else: ### even though vehicle cannot move, the remaining capacity needs to be adjusted
-                    if inflow_link_ou_c < outflow_link_in_c: 
-                        link_update_dict[agent_il_id] = [ 
-                            'inflow', inflow_link_queue_veh, max(0, inflow_link_ou_c - 1), inflow_link_travel_time_list]
-                    elif inflow_link_ou_c > outflow_link_in_c: 
-                        link_update_dict[agent_ol_id] = [
-                            'outflow', outflow_link_run_veh, max(0, outflow_link_in_c - 1), outflow_link_st_c]
+                    if agent_inflow_link.remaining_outflow_capacity < agent_outflow_link.remaining_inflow_capacity: 
+                        agent_inflow_link.remaining_outflow_capacity = max(0, agent_inflow_link.remaining_outflow_capacity-1)
+                    elif agent_inflow_link.remaining_outflow_capacity > agent_outflow_link.remaining_inflow_capacity: 
+                        agent_outflow_link.remaining_inflow_capacity = max(0, agent_outflow_link.remaining_inflow_capacity-1)
                     else:
-                        link_update_dict[agent_il_id] = [ 
-                            'inflow', inflow_link_queue_veh, max(0, inflow_link_ou_c - 1), inflow_link_travel_time_list]
-                        link_update_dict[agent_ol_id] = [
-                            'outflow', outflow_link_run_veh, max(0, outflow_link_in_c - 1), outflow_link_st_c]
-        return node_move, node_move_link_pairs, agent_update_dict, link_update_dict
+                        agent_inflow_link.remaining_outflow_capacity = max(0, agent_inflow_link.remaining_outflow_capacity-1)
+                        agent_outflow_link.remaining_inflow_capacity = max(0, agent_outflow_link.remaining_inflow_capacity-1)
+        
+        self.node_move += node_move
+        # if (self.node_id==7686) and (t_now>=13200):
+        #     print(go_vehicles, agent_outflow_link.status, agent_outflow_link.remaining_inflow_capacity, agent_inflow_link.remaining_outflow_capacity)
+        #     for [agent_id, agent_il_id, agent_ol_id] in go_vehicles:
+        #         agent = agent_id_dict[agent_id]
+        #         print(agent.route)
+        return node_move, node_move_link_pairs
 
 class Link:
     def __init__(self, link_id, lanes, length, fft, capacity, link_type, start_nid, end_nid, geometry):
@@ -357,6 +390,7 @@ class Link:
         self.length = length
         self.fft = fft
         self.capacity = capacity
+        self.normal_capacity = capacity
         self.link_type = link_type
         self.start_nid = start_nid
         self.end_nid = end_nid
@@ -377,9 +411,9 @@ class Link:
         self.run_vehicles = []
         self.travel_time_list = [] ### [(t_enter, dur), ...] travel time of each agent left the link in a given period; reset at times
         self.travel_time = fft
-        self.start_node = None
-        self.end_node = None
-        ### fire related
+        self.total_vehicles_left = 0
+        self.congested = 0
+        ### fire reflated
         self.status = 'open'
         # self.burnt = 'not_yet'
         self.burnt_time = 3600*100
@@ -406,33 +440,37 @@ class Link:
     #         if update_graph: g.update_edge(self.start_nid, self.end_nid, c_double(self.travel_time))
    
     def update_travel_time_by_queue_length(self, g):
-        if (self.status == 'closed') or (self.type == 'v'): return
-        estimated_travel_time = len(self.queue_vehicles) / self.capacity * 3600 + self.fft
+        if (self.status == 'closed') or (self.link_type == 'v'): return
+        estimated_travel_time = len(self.queue_vehicles) / (self.capacity * 3600+0.1) + self.fft
         g.update_edge(self.start_nid, self.end_nid, c_double(estimated_travel_time))
 
     def close_link_to_newcomers(self, g=None):
         g.update_edge(self.start_nid, self.end_nid, c_double(1e8))
+        self.capacity = 0
         # self.status = 'closed'
         ### not updating fft and ou_c because current vehicles need to leave
 
     def open_link_to_newcomers(self, g=None):
-        g.update_edge(self.start_nid, self.end_nid, self.fft)
+        g.update_edge(self.start_nid, self.end_nid, c_double(self.fft))
+        self.capacity = self.normal_capacity
 
 class Agent:
-    def __init__(self, agent_id, origin_nid, destin_nid, deptarture_time, vehicle_length, gps_reroute):
+    def __init__(self, agent_id, origin_nid, destin_nid, departure_time, vehicle_length, gps_reroute, agent_type):
         #input
         self.agent_id = agent_id
         self.origin_nid = origin_nid
         self.destin_nid = destin_nid
         self.furthest_nid = destin_nid
-        self.deptarture_time = deptarture_time
+        self.departure_time = departure_time
         self.vehicle_length = vehicle_length
         self.gps_reroute = gps_reroute
+        self.agent_type = agent_type
         ### derived
         self.current_link_start_nid = 'vn{}'.format(self.origin_nid) # current link start node
         self.current_link_end_nid = self.origin_nid # current link end node
         ### Empty
         self.route = {} ### None or list of route
+        self.route_distance = 5e7
         self.status = 'unloaded' ### unloaded, enroute, shelter, shelter_arrive, arrive
         self.current_link_enter_time = None
         self.next_link = None
@@ -441,12 +479,13 @@ class Agent:
     def get_path(self, g=None):
         sp = g.dijkstra(self.current_link_end_nid, self.destin_nid)
         sp_dist = sp.distance(self.destin_nid)
+        self.route_distance = sp_dist
         if sp_dist > 1e8:
             sp.clear()
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
             self.route = {}
-            self.furthest_nid = self.current_link_end_nid
-            self.status = 'shelter'
+            # self.furthest_nid = self.current_link_end_nid
+            self.status = 'shelter_p'
             # print(self.agent_id, self.current_link_start_nid, self.current_link_end_nid)
         else:
             sp_route = sp.route(self.destin_nid)
@@ -457,12 +496,15 @@ class Agent:
                 self.route[start_nid] = end_nid
             sp.clear()
     
-    def get_partial_path(self, g=None):
+    def get_partial_path(self, g=None, link_id_dict=None, node2link_dict=None):
         look_ahead_limit = 3
         look_ahead_destin = self.current_link_end_nid
+        look_ahead_distance = 0
         for look_ahead_i in range(look_ahead_limit):
             try:
+                look_ahead_destin_old = look_ahead_destin
                 look_ahead_destin = self.route[look_ahead_destin]
+                look_ahead_distance += link_id_dict[node2link_dict[look_ahead_destin_old, look_ahead_destin]].travel_time
             except KeyError:
                 break
         if self.current_link_end_nid == look_ahead_destin: return
@@ -470,25 +512,38 @@ class Agent:
         # calculate partial route
         sp = g.dijkstra(self.current_link_end_nid, look_ahead_destin)
         sp_dist = sp.distance(look_ahead_destin)
+        self.route_distance += sp_dist - look_ahead_distance
         if sp_dist > 1e8:
             sp.clear()
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
             self.route = {}
-            self.furthest_nid = self.current_link_end_nid
-            self.status = 'shelter'
+            # self.furthest_nid = self.current_link_end_nid
+            self.status = 'shelter_p'
         else:
             sp_route = sp.route(look_ahead_destin)
             ### create a path. Order only preserved in Python 3.7+. Do not rely on.
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
-            self.route = {}
-            for (start_nid, end_nid) in sp_route:
+            # self.route = {}
+            sp_route_dict = {start_nid: end_nid for (start_nid, end_nid) in sp_route}
+            if self.agent_id == 15975:
+                print(sp_route_dict)
+            # uturn_permitted = True
+            for start_nid, end_nid in sp_route_dict.items():
                 self.route[start_nid] = end_nid
+                if end_nid in self.route.keys(): break
+                # try:
+                    # if self.route[end_nid] != start_nid: uturn_permitted = False
+                    # if (self.route[end_nid] == start_nid) and (uturn_permitted==False): break
+                # except KeyError:
+                #     pass
+                # self.route[start_nid] = end_nid
             sp.clear()
+        return sp_dist, look_ahead_distance
 
     def load_vehicle(self, t_now, node2link_dict=None, link_id_dict=None):
         ### for unloaded agents
         if (self.status=='unloaded'):
-            if (self.deptarture_time == t_now):
+            if (self.departure_time == t_now):
                 self.this_link = node2link_dict[ (self.current_link_start_nid, self.current_link_end_nid) ]
                 link_id_dict[self.this_link].run_vehicles.append(self.agent_id)
                 self.status = 'enroute'
@@ -502,8 +557,15 @@ class Agent:
         self.this_link = node2link_dict[ (self.current_link_start_nid, self.current_link_end_nid) ]
         try:
             self.next_link_end_nid = self.route[self.current_link_end_nid]
+            # self.next_link_end_nid = self.route.pop(self.current_link_end_nid)
             self.next_link = node2link_dict[ (self.current_link_end_nid, self.next_link_end_nid) ]
         except KeyError:
             self.next_link_end_nid = None
             self.next_link = None
-        
+
+    def move_agent_to_next_link(self, transfer_node=None, t_now=None, node2link_dict=None):
+        self.current_link_start_nid = transfer_node
+        self.current_link_end_nid = self.next_link_end_nid
+        self.current_link_enter_time = t_now
+        self.route.pop(self.current_link_start_nid)
+        self.find_next_link(node2link_dict = node2link_dict)
