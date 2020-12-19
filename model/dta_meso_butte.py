@@ -89,18 +89,18 @@ def link_model(t, network, links_raster, reroute_freq, link_closure_prob=None):
         ### raster fire intersection: only close residential and unclassified roads. no harm to virtual links or higher class links.
         if (link.link_id in links_in_fire) and (link.status == 'open') and (link.link_type in ['residential', 'unclassified']):
             link.status = 'burning'
+            link.burnt_time = t
             if (np.random.uniform(0,1) < link_closure_prob):
                 link.close_link_to_newcomers(g=network.g)
                 link.status = 'burning_closed'
-                link.burnt_time = t
         # if link.link_id in links_in_fire:
         #     print(link.link_id, link.status, link.link_type)
         
         ### reopen some links
         if (link.status in ['burning', 'burning_closed']) and (t-link.burnt_time>1800):
-            link.status='burnt_over'
             if link.status == 'burning_closed':
                 link.open_link_to_newcomers(t, g=network.g)
+            link.status='burnt_over'
 
     return network
 
@@ -269,7 +269,11 @@ def one_step(t, data, config):
                 in_fire_cnts += len(link.run_vehicles)+len(link.queue_vehicles)
         # temporarily safe
         outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts = outside_polygon(evacuation_zone, evacuation_buffer, veh_loc)
-        avg_fire_dist = np.mean(haversine.scipy_point_to_vertex_distance_positive(np.array(veh_loc), np.array(fire_loc)))
+        if len(fire_loc) == 0:
+            vehicle_fire_distance = np.ones(len(veh_loc))*100000
+        else:
+            vehicle_fire_distance = haversine.scipy_point_to_vertex_distance_positive(np.array(veh_loc), np.array(fire_loc))
+        avg_fire_dist = np.mean(vehicle_fire_distance)
         # in_fire_cnts = sum([len(link.run_vehicles)+len(link.queue_vehicles) for link in network.links.values if link.status in ['burning_closed', 'burnning']])
         ### arrival
         with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm),'a') as t_stats_outfile:
