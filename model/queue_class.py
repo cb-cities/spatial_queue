@@ -45,14 +45,9 @@ class Network:
         nodes_df = nodes_df[['nid', 'x', 'y', 'osmid']]
         # edges
         links_df = pd.read_csv(home_dir + network_file_edges)
-        # print(links_df[links_df['lanes']==0])
-        # sys.exit(0)
         if len(cf_files)>0:
             for cf_file in cf_files:
-                try:
-                    contraflow_links_df = pd.read_csv(home_dir + cf_file)
-                except:
-                    print(home_dir+cf_file)
+                contraflow_links_df = pd.read_csv(home_dir + cf_file)
                 contraflow_links_df['new_lanes'] = contraflow_links_df['lanes']
                 # print(contraflow_links_df[contraflow_links_df['new_lanes']==0])
                 links_df = links_df.merge(contraflow_links_df[['nid_s', 'nid_e', 'new_lanes']], how='left', on=['nid_s', 'nid_e'])
@@ -60,13 +55,21 @@ class Network:
 
         links_df['maxmph'] = np.where(links_df['lanes']==0, 0.00000001, links_df['maxmph'])
         links_df['fft'] = links_df['length']/links_df['maxmph']*2.237
+        # links_df = links_df.iloc[0:1]
+        # set the fft of the longer one in double links to infinite
+        # links_df = links_df.sort_values(by='fft', ascending=True)
+        # links_df['duplicated'] = links_df[['nid_s', 'nid_e']].duplicated()
+        # links_df['fft'] = np.where(links_df['duplicated'], 1e8, links_df['fft'])
+        # links_df = links_df.sort_values(by='eid', ascending=True)
         links_df['capacity'] = 1900*links_df['lanes']
-        # print(links_df[links_df['lanes']==0])
-        # sys.exit(0)
         links_df['capacity'] = np.where(links_df['capacity']==0, 0.01, links_df['capacity'])
+        # print(links_df['geometry'].iloc[0])
         links_df = gpd.GeoDataFrame(links_df, crs='epsg:4326', geometry=links_df['geometry'].map(loads)).to_crs('epsg:26910')
+        # print(links_df.iloc[0])
+        # sys.exit(0)
         links_df = links_df[['eid', 'nid_s', 'nid_e', 'type', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
         links_df.to_csv(home_dir + project_location + '/simulation_outputs/network/modified_network_edges_{}.csv'.format(scen_nm), index=False)
+        # sys.exit(0)
         
         ### link closure
         for closure_link in special_nodes['closure']:
@@ -110,7 +113,7 @@ class Network:
                 for start_node in tmp_end_nodes:
                     for end_node in tmp_start_nodes:
                         if (start_node[-1], end_node[-1]) not in prohibit_turns:
-                            print((start_node[-1], end_node[-1]), prohibit_turns)
+                            # print((start_node[-1], end_node[-1]), prohibit_turns)
                             new_links.append([new_link_id, start_node[0], end_node[0], start_node[1], start_node[2], end_node[1], end_node[2]])
                             new_link_id += 1
             new_links_df = pd.DataFrame(new_links, columns=['eid','nid_s', 'nid_e', 'start_x', 'start_y', 'end_x', 'end_y'])
@@ -146,7 +149,14 @@ class Network:
         for row in links_df.itertuples():
             real_link = Link(getattr(row, 'eid'), getattr(row, 'lanes'), getattr(row, 'length'), getattr(row, 'fft'), getattr(row, 'capacity'), getattr(row, 'type'), getattr(row, 'nid_s'), getattr(row, 'nid_e'), getattr(row, 'geometry'))
             self.links[real_link.link_id] = real_link
-            self.node2link_dict[(real_link.start_nid, real_link.end_nid)] = real_link.link_id
+            ### deal with duplicated links: keep the faster ones
+            if (real_link.start_nid, real_link.end_nid) in self.node2link_dict.keys():
+                if real_link.fft < self.links[self.node2link_dict[(real_link.start_nid, real_link.end_nid)]].fft:
+                    self.node2link_dict[(real_link.start_nid, real_link.end_nid)] = real_link.link_id
+                else:
+                    pass
+            else:
+                self.node2link_dict[(real_link.start_nid, real_link.end_nid)] = real_link.link_id
 
     def add_connectivity(self):
         for link_id, link in self.links.items():
@@ -205,6 +215,7 @@ class Node:
         # self.go_vehs = [] ### veh that moves in this time step
         self.status = None
         self.node_move = 0
+        self.shelter_counts = 0
 
     def create_virtual_node(self):
         return Node('vn{}'.format(self.node_id), self.x+1, self.y+1, 'v')
@@ -396,6 +407,12 @@ class Link:
         self.end_nid = end_nid
         self.geometry = geometry
         ### derived
+        try:
+            self.maxmph = self.length/self.fft * 2.23694
+            # self.maxmph = np.where(link_type=='v', 1e5, self.length/self.fft * 2.23694)
+        except ZeroDivisionError:
+            self.maxmph = 1e5
+            # print(link_id, 1e5)
         self.storage_capacity = max(18, length*lanes) ### at least allow any vehicle to pass. i.e., the road won't block any vehicle because of the road length
         self.remaining_inflow_capacity = self.capacity/3600.0 # capacity in veh/s
         self.remaining_outflow_capacity = self.capacity/3600.0
@@ -417,6 +434,7 @@ class Link:
         self.status = 'open'
         # self.burnt = 'not_yet'
         self.burnt_time = 3600*100
+        self.closed_time = 3600*100
         # self.fire_time = None
         # self.fire_type = None
 
@@ -431,7 +449,7 @@ class Link:
         ### remaining spaces on link for the node model to move vehicles to this link
         self.remaining_storage_capacity = self.storage_capacity - sum([agent_id_dict[agent_id].vehicle_length for agent_id in self.run_vehicles+self.queue_vehicles])
         self.remaining_inflow_capacity, self.remaining_outflow_capacity = self.capacity/3600, self.capacity/3600
-        if self.status=='closed': self.remaining_inflow_capacity = 0
+        if (self.status in ['closed', 'burning_closed']): self.remaining_inflow_capacity = 0
     
     # def update_travel_time(self, t_now, link_time_lookback_freq=None, g=None, update_graph=False):
     #     self.travel_time_list = [(t_rec, duration) for (t_rec, duration) in self.travel_time_list if (t_now-t_rec < link_time_lookback_freq)]
@@ -440,19 +458,19 @@ class Link:
     #         if update_graph: g.update_edge(self.start_nid, self.end_nid, c_double(self.travel_time))
    
     def update_travel_time_by_queue_length(self, g):
-        if (self.status == 'closed') or (self.link_type == 'v'): return
-        estimated_travel_time = len(self.queue_vehicles) / (self.capacity * 3600+0.1) + self.fft
+        if (self.status in ['closed', 'burning_closed']) or (self.link_type == 'v'): return
+        estimated_travel_time = len(self.queue_vehicles)/ (self.capacity + 0.1) * 3600 * 25/self.maxmph + self.fft
         g.update_edge(self.start_nid, self.end_nid, c_double(estimated_travel_time))
 
     def close_link_to_newcomers(self, g=None):
         g.update_edge(self.start_nid, self.end_nid, c_double(1e8))
-        self.capacity = 0
+        # self.capacity = 0
         # self.status = 'closed'
         ### not updating fft and ou_c because current vehicles need to leave
 
     def open_link_to_newcomers(self, g=None):
         g.update_edge(self.start_nid, self.end_nid, c_double(self.fft))
-        self.capacity = self.normal_capacity
+        # self.capacity = self.normal_capacity
 
 class Agent:
     def __init__(self, agent_id, origin_nid, destin_nid, departure_time, vehicle_length, gps_reroute, agent_type):
@@ -471,23 +489,27 @@ class Agent:
         ### Empty
         self.route = {} ### None or list of route
         self.route_distance = 5e7
+        self.fft_distance = 5e7
         self.status = 'unloaded' ### unloaded, enroute, shelter, shelter_arrive, arrive
         self.current_link_enter_time = None
         self.next_link = None
         self.next_link_end_nid = None ### next link end
 
-    def get_path(self, g=None):
+    def get_path(self, t, g=None):
         sp = g.dijkstra(self.current_link_end_nid, self.destin_nid)
         sp_dist = sp.distance(self.destin_nid)
-        self.route_distance = sp_dist
-        if sp_dist > 1e8:
+        if (t==0) and (sp_dist > 1e8):
             sp.clear()
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
             self.route = {}
             # self.furthest_nid = self.current_link_end_nid
             self.status = 'shelter_p'
             # print(self.agent_id, self.current_link_start_nid, self.current_link_end_nid)
+        elif (t>0) and (sp_dist>1e8):
+            sp.clear()
+            pass
         else:
+            self.route_distance = sp_dist
             sp_route = sp.route(self.destin_nid)
             ### create a path. Order only preserved in Python 3.7+. Do not rely on.
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
@@ -496,40 +518,59 @@ class Agent:
                 self.route[start_nid] = end_nid
             sp.clear()
     
-    def get_partial_path(self, g=None, link_id_dict=None, node2link_dict=None):
+    def get_partial_path(self, t, g=None, link_id_dict=None, node2link_dict=None):
+
+        # for k, v in self.route.items():
+        #     if k == self.current_link_end_nid: break
+        #     else: del self.route[k]
         look_ahead_limit = 3
         look_ahead_destin = self.current_link_end_nid
         look_ahead_distance = 0
+        look_ahead_reroute_distance = 0
+        look_ahead_destin_old_list = []
         for look_ahead_i in range(look_ahead_limit):
             try:
                 look_ahead_destin_old = look_ahead_destin
-                look_ahead_destin = self.route[look_ahead_destin]
-                look_ahead_distance += link_id_dict[node2link_dict[look_ahead_destin_old, look_ahead_destin]].travel_time
+                look_ahead_destin = self.route[look_ahead_destin_old]
+                look_ahead_destin_old_list.append(look_ahead_destin_old)
+                look_ahead_distance += link_id_dict[node2link_dict[(look_ahead_destin_old, look_ahead_destin)]].travel_time
             except KeyError:
+                if self.agent_id == 6965:
+                    print('after ', self.agent_id, self.route, look_ahead_destin)
                 break
         if self.current_link_end_nid == look_ahead_destin: return
 
         # calculate partial route
         sp = g.dijkstra(self.current_link_end_nid, look_ahead_destin)
         sp_dist = sp.distance(look_ahead_destin)
-        self.route_distance += sp_dist - look_ahead_distance
-        if sp_dist > 1e8:
+        # self.route_distance += (sp_dist - look_ahead_distance)
+        if (t==0) and (sp_dist > 1e8):
             sp.clear()
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
             self.route = {}
             # self.furthest_nid = self.current_link_end_nid
             self.status = 'shelter_p'
+        elif (t>0) and (sp_dist>1e8):
+            sp.clear()
+            pass
         else:
+            self.route_distance -= look_ahead_distance
             sp_route = sp.route(look_ahead_destin)
             ### create a path. Order only preserved in Python 3.7+. Do not rely on.
             # self.route = {self.current_link_start_nid: self.current_link_end_nid}
             # self.route = {}
-            sp_route_dict = {start_nid: end_nid for (start_nid, end_nid) in sp_route}
-            if self.agent_id == 15975:
-                print(sp_route_dict)
+            # sp_route_dict = {start_nid: end_nid for (start_nid, end_nid) in sp_route}
+            # if self.agent_id == 6965:
+            #     print('after ', self.agent_id, self.route, sp_route_dict)
             # uturn_permitted = True
-            for start_nid, end_nid in sp_route_dict.items():
+            for look_ahead_destin_old in look_ahead_destin_old_list:
+                del self.route[look_ahead_destin_old]
+            for (start_nid, end_nid) in sp_route:
+                # if self.agent_id == 6965:
+                #     print('after ', self.agent_id, start_nid, end_nid)
                 self.route[start_nid] = end_nid
+                self.route_distance += link_id_dict[node2link_dict[(start_nid, end_nid)]].travel_time
+                look_ahead_reroute_distance += link_id_dict[node2link_dict[(start_nid, end_nid)]].travel_time
                 if end_nid in self.route.keys(): break
                 # try:
                     # if self.route[end_nid] != start_nid: uturn_permitted = False
@@ -538,7 +579,7 @@ class Agent:
                 #     pass
                 # self.route[start_nid] = end_nid
             sp.clear()
-        return sp_dist, look_ahead_distance
+        return sp_dist, look_ahead_distance, look_ahead_reroute_distance
 
     def load_vehicle(self, t_now, node2link_dict=None, link_id_dict=None):
         ### for unloaded agents

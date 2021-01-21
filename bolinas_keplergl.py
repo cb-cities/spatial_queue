@@ -1,6 +1,7 @@
 from keplergl import KeplerGl
 import model.dta_meso_bolinas3 as dta_meso
 
+import sys
 import json
 import pandas as pd 
 import geopandas as gpd
@@ -9,8 +10,9 @@ from shapely.wkt import loads
 
 import random
 import numpy as np
-random.seed(0)
-np.random.seed(0)
+random_seed = 0
+random.seed(random_seed)
+np.random.seed(random_seed)
 
 def extract_vehicle_locations(network):
     agents_dict = network.agents.copy()
@@ -96,20 +98,18 @@ def make_map(network):
     map_vehicles.add_data(data=closed_link_gdf, name='closed_links')
     return map_vehicles
 
-def main(random_seed=0, fire_id=1, comm_id=0, vphh=2, visitor_cnts=300, contra_id='0', wait_time=1, link_closed_time=0):
+def main(fire_id='1', comm_id='1', vphh=2, visitor_cnts=300, contra_id='0', shelter_scen_id='0', link_closed_time=0, closed_mode='flame'):
     # preparation
-    scen_nm = "r{}_fire{}_comm{}_vphh{}_vistor{}_contra{}_wait{}_close{}".format(random_seed, fire_id, comm_id, vphh, visitor_cnts, contra_id, wait_time, link_closed_time)
-    data, config = dta_meso.preparation(random_seed=0, fire_id=fire_id, comm_id=comm_id, vphh=vphh, visitor_cnts=visitor_cnts, contra_id=contra_id, wait_time=wait_time, link_closed_time=link_closed_time, scen_nm=scen_nm)
+    scen_nm = "r{}_fire{}_comm{}_vphh{}_vistor{}_contra{}_close{}m{}_shelter{}".format(random_seed, fire_id, comm_id, vphh, visitor_cnts, contra_id, link_closed_time, closed_mode, shelter_scen_id)
+    data, config, update_data = dta_meso.preparation(random_seed=random_seed, fire_id=fire_id, comm_id=comm_id, vphh=vphh, visitor_cnts=visitor_cnts, contra_id=contra_id, shelter_scen_id=shelter_scen_id, link_closed_time=link_closed_time, closed_mode=closed_mode, scen_nm=scen_nm)
 
     fitness=0
-    visualization_t_list = {300, 1200, 2400, 3600, 5400, 7200, 10800, 3600*4, 3600*5}
-    in_fire_dict = dict()
-    for t in range(0, 36001):
-        step_fitness, network, status, in_fire_dict = dta_meso.one_step(t, data, config, in_fire_dict)
+    visualization_t_list = [300*i for i in range(6, 20)]#[3600*i for i in range(8)]
+    for t in range(0, 7201):
+        step_fitness, network, status, update_data = dta_meso.one_step(t, data, config, update_data)
         if step_fitness is not None:
             fitness += step_fitness
         if t in visualization_t_list:
-            # visualization_t_dict[t] = make_map(network)
             map = make_map(network)
             map.save_to_html(file_name="projects/bolinas/visualization_outputs/map_{}_{}.html".format(scen_nm, t))
         if status == 'stop':

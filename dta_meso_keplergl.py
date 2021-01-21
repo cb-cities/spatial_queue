@@ -9,8 +9,10 @@ from shapely.wkt import loads
 
 import random
 import numpy as np
-random.seed(0)
-np.random.seed(0)
+
+random_seed = 20
+random.seed(random_seed)
+np.random.seed(random_seed)
 
 def extract_vehicle_locations(network):
     agents_dict = network.agents.copy()
@@ -98,11 +100,11 @@ def make_map(network):
 
 def main(vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2'):
     # preparation
-    scen_nm = "v{}_d{}_cl{}_ct{}_ru{}".format(vphh_id, dept_id, clos_id, contra_id, rout_id)
-    data, config = dta_meso.preparation(random_seed=0, vphh_id=vphh_id, dept_id=dept_id, clos_id=clos_id, contra_id=contra_id, rout_id=rout_id, scen_nm=scen_nm)
+    scen_nm = "r{}_v{}_d{}_cl{}_ct{}_ru{}".format(random_seed, vphh_id, dept_id, clos_id, contra_id, rout_id)
+    data, config = dta_meso.preparation(random_seed=random_seed, vphh_id=vphh_id, dept_id=dept_id, clos_id=clos_id, contra_id=contra_id, rout_id=rout_id, scen_nm=scen_nm)
 
     fitness=0
-    visualization_t_list = {300, 1200, 2400, 3600, 5400, 7200, 10800, 3600*4, 3600*5, 3600*6}
+    visualization_t_list = {300, 1200, 2400, 3600, 5400, 7200, 8700, 9900, 10200, 10500, 3600*3, 3600*4, 3600*5, 3600*6}
     for t in range(0, 36001):
         step_fitness, network = dta_meso.one_step(t, data, config)
         if step_fitness is not None:
