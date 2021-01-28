@@ -169,7 +169,7 @@ class Network:
                     if isinstance(incoming_link, str) and (incoming_link[-2:] == 'vl'):
                         turning_angle = 0
                     else:
-                        turning_angle = - self.links[incoming_link].angle + self.links[outgoing_link].angle
+                        turning_angle = - self.links[incoming_link].out_angle + self.links[outgoing_link].in_angle
                     # adjust for more than 180 turning angles
                     if turning_angle >= np.pi:
                         turning_angle = 2*np.pi - turning_angle
@@ -420,9 +420,12 @@ class Link:
         self.midpoint = list(self.geometry.interpolate(0.5, normalized=True).coords)[0]
         # angle
         # geometry_3857 = transform(geo2prj.transform, self.geometry)
-        (node_1x, node_1y) = self.geometry.coords[0]
-        node2 = self.geometry.interpolate(0.1, normalized=True)
-        self.angle = np.arctan2(node2.y - node_1y, node2.x - node_1x)
+        (node_sx, node_sy) = self.geometry.coords[0]
+        node_sx1 = self.geometry.interpolate(0.01, normalized=True)
+        self.in_angle = np.arctan2(node_sx1.y - node_sy, node_sx1.x - node_sx)
+        (node_ex, node_ey) = self.geometry.coords[-1]
+        node_ex1 = self.geometry.interpolate(0.99, normalized=True)
+        self.out_angle = np.arctan2(node_ey - node_ex1.y, node_ex - node_ex1.x)
         ### empty
         self.queue_vehicles = [] # [(agent, t_enter), (agent, t_enter), ...]
         self.run_vehicles = []
