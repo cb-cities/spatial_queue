@@ -1,6 +1,6 @@
 # Bolinas traffic simulation (CIVIC project)
 
-### Folder structure
+### File structure
 ```
 +-- environment.yml (Python packages from Anaconda)
 +-- README.md
@@ -19,6 +19,7 @@
 ### Installation
 1. Create conda environment `conda env create -f environment.yml`
 2. Install `sp`
+3. Make some directories `mkdir -p simulation_outputs/link_weights simulation_outputs/log simulation_outputs/network`
 
 ### Usage
 1. Run the simulation
