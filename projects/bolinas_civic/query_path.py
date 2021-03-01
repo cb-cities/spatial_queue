@@ -51,6 +51,8 @@ def query_path(vphh=None, visitor_cnts=None, player_origin=None, player_destin=N
             current_link_distance = current_link_distance - network_links[str(current_link)]['length']
             
             # reroute at intersection
+            links_df['current_travel_time'] = link_speed_dict[str(t_p)]
+            network_g = interface.from_dataframe(links_df, 'nid_s', 'nid_e', 'current_travel_time')
             player_route_by_nodes = get_route(network_g, network_links[str(current_link)]['end_nid'], player_destin)
             # print(player_route_by_nodes)
             
