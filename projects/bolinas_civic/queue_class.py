@@ -2,27 +2,23 @@
 # coding: utf-8
 import os
 import sys
-import time 
 import random
-import logging 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 from random import shuffle
 from ctypes import c_double
-import scipy.spatial.distance
 from shapely.wkt import loads
 from shapely.ops import split
 from shapely.geometry import Point
 from shapely.geometry import LineString
 # for coordinate transformation
-from shapely.ops import transform
-import pyproj
-geo2prj = pyproj.Transformer.from_proj(pyproj.Proj('epsg:4326'), pyproj.Proj('epsg:3857'), always_xy=True)
-### dir
-home_dir = '/home/bingyu/Documents/spatial_queue' # os.environ['HOME']+'/spatial_queue'
-### user
-sys.path.insert(0, home_dir+'/..')
+# from shapely.ops import transform
+# import pyproj
+# geo2prj = pyproj.Transformer.from_proj(pyproj.Proj('epsg:4326'), pyproj.Proj('epsg:3857'), always_xy=True)
+### usr
+abs_path = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, abs_path)
 from sp import interface
 
 class Network:
@@ -38,16 +34,17 @@ class Network:
     def dataframe_to_network(self, project_location=None, network_file_edges=None, network_file_nodes=None, cf_files = None, special_nodes=None, scen_nm=None):
         
         # nodes
-        nodes_df = pd.read_csv(home_dir + network_file_nodes)
+        print(abs_path)
+        nodes_df = pd.read_csv(abs_path + network_file_nodes)
         nodes_df = gpd.GeoDataFrame(nodes_df, crs='epsg:4326', geometry=[Point(x, y) for (x, y) in zip(nodes_df.lon, nodes_df.lat)]).to_crs('epsg:26910')
         nodes_df['x'] = nodes_df['geometry'].apply(lambda x: x.x)
         nodes_df['y'] = nodes_df['geometry'].apply(lambda x: x.y)
         nodes_df = nodes_df[['nid', 'x', 'y', 'osmid']]
         # edges
-        links_df = pd.read_csv(home_dir + network_file_edges)
-        if len(cf_files)>0:
+        links_df = pd.read_csv(abs_path + network_file_edges)
+        if (cf_files is not None) and len(cf_files)>0:
             for cf_file in cf_files:
-                contraflow_links_df = pd.read_csv(home_dir + cf_file)
+                contraflow_links_df = pd.read_csv(abs_path + cf_file)
                 contraflow_links_df['new_lanes'] = contraflow_links_df['lanes']
                 # print(contraflow_links_df[contraflow_links_df['new_lanes']==0])
                 links_df = links_df.merge(contraflow_links_df[['nid_s', 'nid_e', 'new_lanes']], how='left', on=['nid_s', 'nid_e'])
@@ -68,7 +65,7 @@ class Network:
         # print(links_df.iloc[0])
         # sys.exit(0)
         links_df = links_df[['eid', 'nid_s', 'nid_e', 'type', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
-        links_df.to_csv(home_dir + project_location + '/simulation_outputs/network/modified_network_edges_{}.csv'.format(scen_nm), index=False)
+        links_df.to_csv(abs_path + project_location + '/simulation_outputs/network/modified_network_edges_{}.csv'.format(scen_nm), index=False)
         # sys.exit(0)
         
         ### link closure
@@ -181,7 +178,7 @@ class Network:
     def add_demand(self, demand_files=None, reroute_pct=0, tow_pct=0):
         all_od_list = []
         for demand_file in demand_files:
-            od = pd.read_csv(home_dir + demand_file)
+            od = pd.read_csv(abs_path + demand_file)
             ### transform OSM based id to graph node id
             od['origin_nid'] = od['origin_osmid'].apply(lambda x: self.nodes_osmid_dict[x])
             od['destin_nid'] = od['destin_osmid'].apply(lambda x: self.nodes_osmid_dict[x])

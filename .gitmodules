@@ -1,0 +1,3 @@
+[submodule "projects/bolinas_civic/sp"]
+	path = projects/bolinas_civic/sp
+	url = https://github.com/cb-cities/sp.git
