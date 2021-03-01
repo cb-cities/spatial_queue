@@ -1,6 +1,7 @@
 # Bolinas traffic simulation (CIVIC project)
 
 ### Folder structure
+```
 +-- environment.yml (Python packages from Anaconda)
 +-- README.md
 +-- run_traffic_simulation.py (generate simulation results: time-stamped link speed)
@@ -13,6 +14,7 @@
 |   +-- simple_od.py (generate OD according to VPHH and visitor counts)
 +-- simulation_outputs
 |   +-- link_weights (folder containing time-stepped link weights)
+```
 
 ### Installation
 1. Create conda environment `conda env create -f environment.yml`
