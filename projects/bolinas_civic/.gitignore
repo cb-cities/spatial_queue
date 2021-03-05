@@ -1,2 +1,3 @@
 !environment.yml
 !network_inputs/*
+!demand_inputs/parcels/parcels_bolinas/*
