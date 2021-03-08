@@ -1,2 +1,4 @@
 !environment.yml
 !network_inputs/*
+!demand_inputs/*
+*.ipynb_checkpoints*

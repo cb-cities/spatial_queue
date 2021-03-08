@@ -2,28 +2,21 @@
 
 Simulating traffic flow using spatial-queue-based model.
 
-* Link model: spatial queue
-* Node model: obeying the inflow/outflow/storage capacity of links; protected left-turns
-* Routing: fastest path; rerouting at fixed time interval
+![Bolinas evacuation](images/r0_fire3_comm3_vphh2_vistor300_contra0_close0mflame_shelter0.gif)
+Modeling evacuation under wildfires.
 
-### Dependency
-* Shortest path [`sp`](https://github.com/cb-cities/sp)
+### Features
+* Spatial-queue based mesoscopic traffic simulation
+* Collision-free node model (e.g., protected left turns)
+* Temporal resolution: 1 second
+* Route computation: priority-queue based Dijkstra algorithm [sp](https://github.com/cb-cities/sp). Flexible rerouting frequency
+* Compatible with road network retrieved from [OSMnx](https://github.com/gboeing/osmnx)
 
-### Folder structure
-* `queue_class.py`: Python class for Node, Link and Agent
-* `dta_meso_[case_study_name].py`: simulation customized for each case study
-* `projects/`: inputs and outputs for each case study
-    * `[case_study_name]/`: data for each case study stored in separate folders
-        * `network_inputs/`: road network graph inputs
-            * `nodes.csv`
-            * `edges.csv`
-        * `demand_inputs/`: o-d pairs inputs
-            * `od.csv`
-        * `simulation_outputs/`: outputs
-            * `log/`
-            * `t_stats/`
-            * `link_stats/`
-            * `node_stats/`
+### Use cases
+* Wildfire evacuation: fire-induced road closures, staggered departures, queue spillback and congestion at traffic bottleneck
+* Traffic accidents and other non-typical interruptive events
+* Technology appriasal: e.g. value of real-time traffic information (GPS penetration rate and accuracy)
+* Suitable for network size from a few links to tens of thousands of links (whole county level)
 
-### Run the simulation
-`python dta_meso_[case_study_name].py`
+### Getting started
+See [the standalone example](projects/bolinas_civic), with the case study in Bolinas, CA.
