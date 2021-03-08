@@ -8,6 +8,7 @@
 !*.py
 !*.ipynb
 !*.md
+!*.gif
 # !projects/bolinas_civic/network_inputs/*
 # !projects/bolinas_civic/demand_inputs/*
 
