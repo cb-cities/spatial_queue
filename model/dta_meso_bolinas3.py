@@ -19,8 +19,8 @@ from shapely.geometry import Point
 import scipy.spatial.distance
 ### dir
 home_dir = '/home/bingyu/Documents/spatial_queue' # os.environ['HOME']+'/spatial_queue'
-work_dir = '/home/bingyu/Documents/spatial_queue' # os.environ['WORK']+'/spatial_queue'
-scratch_dir = '/home/bingyu/Documents/spatial_queue/projects/bolinas/simulation_outputs' # os.environ['OUTPUT_FOLDER']
+work_dir = '/home/bingyu/Documents/traffic_data' # os.environ['WORK']+'/spatial_queue'
+scratch_dir = '/home/bingyu/Documents/traffic_data/bolinas/simulation_outputs' # os.environ['OUTPUT_FOLDER']
 ### user
 sys.path.insert(0, home_dir)
 import util.haversine as haversine
@@ -341,7 +341,7 @@ def one_step(t, data, config, update_data):
 def preparation(random_seed=0, fire_id=None, comm_id=None, vphh=None, visitor_cnts=None, contra_id=None, link_closed_time=None, closed_mode=None, shelter_scen_id=None, scen_nm=None):
     ### logging and global variables
 
-    project_location = '/projects/bolinas'
+    project_location = work_dir + '/bolinas'
     network_file_edges = project_location + '/network_inputs/bolinas_edges_sim.csv'
     network_file_nodes = project_location + '/network_inputs/bolinas_nodes_sim.csv'
     network_file_special_nodes = project_location + '/network_inputs/bolinas_special_nodes.json'
@@ -360,8 +360,8 @@ def preparation(random_seed=0, fire_id=None, comm_id=None, vphh=None, visitor_cn
     print('log file created for {}'.format(scen_nm))
 
     ### network
-    links_raster = [rio.open(work_dir + network_file_edges_raster1).read(1), rio.open(work_dir + network_file_edges_raster2).read(1)]
-    with open(work_dir + network_file_special_nodes) as special_nodes_file:
+    links_raster = [rio.open(network_file_edges_raster1).read(1), rio.open(network_file_edges_raster2).read(1)]
+    with open(network_file_special_nodes) as special_nodes_file:
         special_nodes = json.load(special_nodes_file)
     network = Network()
     network.dataframe_to_network(project_location=project_location, network_file_edges = network_file_edges, network_file_nodes = network_file_nodes, cf_files = cf_files, special_nodes=special_nodes, scen_nm=scen_nm)
@@ -372,16 +372,16 @@ def preparation(random_seed=0, fire_id=None, comm_id=None, vphh=None, visitor_cn
     logging.info('total numbers of agents taken {}'.format(len(network.agents.keys())))
 
     ### evacuation zone
-    evacuation_zone_df = pd.read_csv(work_dir + project_location + '/network_inputs/bolinas_boundary.csv')
+    evacuation_zone_df = pd.read_csv(project_location + '/network_inputs/bolinas_boundary.csv')
     evacuation_zone_gdf = gpd.GeoDataFrame(evacuation_zone_df, crs='epsg:4326', geometry = evacuation_zone_df['WKT'].map(loads)).to_crs('epsg:26910')
     evacuation_zone = evacuation_zone_gdf['geometry'].unary_union
     evacuation_buffer = evacuation_zone_gdf['geometry'].buffer(1609).unary_union
     logging.info('Evacuation zone is {:.2f} km2, considering 1 mile buffer it is {:.2f} km2'.format(evacuation_zone.area/1e6, evacuation_buffer.area/1e6))
     
     ### fire
-    fire_array = rio.open(work_dir + project_location + '/demand_inputs/flamelength/time_fire{}_match_road.tif'.format(fire_id)).read(1)*3600
-    flame_array = rio.open(work_dir + project_location + '/demand_inputs/flamelength/flame_fire{}_match_road.tif'.format(fire_id)).read(1)
-    eucalyptus_array = rio.open(work_dir + project_location + '/demand_inputs/fire/eucalyptus_match_roads.tif').read(1)
+    fire_array = rio.open(project_location + '/demand_inputs/flamelength/time_fire{}_match_road.tif'.format(fire_id)).read(1)*3600
+    flame_array = rio.open(project_location + '/demand_inputs/flamelength/flame_fire{}_match_road.tif'.format(fire_id)).read(1)
+    eucalyptus_array = rio.open(project_location + '/demand_inputs/fire/eucalyptus_match_roads.tif').read(1)
     # print(np.sum([fire_array<3600]))
     # print(np.min(fire_array))
     # sys.exit(0)

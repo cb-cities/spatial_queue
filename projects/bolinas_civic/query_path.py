@@ -36,6 +36,9 @@ def query_path(vphh=None, visitor_cnts=None, player_origin=None, player_destin=N
     current_link = 'n{}_vl'.format(player_origin)
     current_link_distance = 0
     current_link_angle = 0
+
+    # all nodes that player passed
+    player_nodes = [player_origin]
     
     for t_p in range(start_time, end_time):
         if t_p > start_time:
@@ -59,5 +62,7 @@ def query_path(vphh=None, visitor_cnts=None, player_origin=None, player_destin=N
             ### move agent to to chosen link
             next_node = player_route_by_nodes[network_links[str(current_link)]['end_nid']]
             current_link = node2link_dict[str(network_links[str(current_link)]['end_nid'])][str(next_node)]
+            player_nodes.append(network_links[str(current_link)]['end_nid'])
             # print('new link {} at {}\n'.format(current_link, t_p))  
     print('vehicle is on link {} at {} seconds. The end node ID of the current link is {}'.format(current_link, end_time, next_node))
+    print('Player path nodes {}'.format(player_nodes))
