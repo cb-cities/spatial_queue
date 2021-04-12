@@ -205,4 +205,3 @@ def run_traffic_simulation(vphh=None, visitor_cnts=None, write_path=None):
     with open(write_path+'/simulation_outputs/network/node2link_dict.json', 'w') as outfile:
         json.dump(node2link_dict, outfile, indent=2)
 
-run_traffic_simulation(vphh=1.5, visitor_cnts=300)
