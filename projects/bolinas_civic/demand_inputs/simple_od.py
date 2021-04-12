@@ -41,7 +41,7 @@ def map_parcels_to_nodes():
     
     return household_parcels, visitor_nodes_gdf
 
-def generate_simple_od(vphh=1, visitor_cnts=0):
+def generate_simple_od(vphh=1, visitor_cnts=0, demand_write_path=None):
     
     household_parcels, visitor_nodes_gdf = map_parcels_to_nodes()
     
@@ -68,5 +68,5 @@ def generate_simple_od(vphh=1, visitor_cnts=0):
     #od_df['destin_osmid'] = np.random.choice(['110360959', '110397253'], size=od_df.shape[0])
     
     ### save to output
-    od_df.to_csv(absolute_path + '/od_csv/resident_visitor_od_vphh{}_visitor{}.csv'.format(vphh, visitor_cnts), index=False)
+    od_df.to_csv(demand_write_path + '/od_csv/resident_visitor_od_vphh{}_visitor{}.csv'.format(vphh, visitor_cnts), index=False)
 
