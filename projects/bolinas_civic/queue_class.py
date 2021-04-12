@@ -31,7 +31,7 @@ class Network:
         self.agents = {}
         self.agents_stopped = {}
     
-    def dataframe_to_network(self, project_location=None, network_file_edges=None, network_file_nodes=None, cf_files = None, special_nodes=None, scen_nm=None, write_path = None):
+    def dataframe_to_network(self, project_location=None, network_file_edges=None, network_file_nodes=None, cf_files = None, special_nodes=None, scen_nm=None):
         
         # nodes
         print(abs_path)
@@ -65,7 +65,7 @@ class Network:
         # print(links_df.iloc[0])
         # sys.exit(0)
         links_df = links_df[['eid', 'nid_s', 'nid_e', 'type', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
-        links_df.to_csv(write_path + project_location + '/simulation_outputs/network/modified_network_edges_{}.csv'.format(scen_nm), index=False)
+        links_df.to_csv(abs_path + project_location + '/simulation_outputs/network/modified_network_edges_{}.csv'.format(scen_nm), index=False)
         # sys.exit(0)
         
         ### link closure
@@ -175,13 +175,10 @@ class Network:
                     turning_angle = turning_angle/np.pi*180
                     node.incoming_links[incoming_link][outgoing_link] = turning_angle
     
-    def add_demand(self, demand_files=None, reroute_pct=0, tow_pct=0, write_path = None):
+    def add_demand(self, demand_files=None, reroute_pct=0, tow_pct=0):
         all_od_list = []
-        if not write_path:
-            write_path = abs_path
-        
         for demand_file in demand_files:
-            od = pd.read_csv(write_path + demand_file)
+            od = pd.read_csv(abs_path + demand_file)
             ### transform OSM based id to graph node id
             od['origin_nid'] = od['origin_osmid'].apply(lambda x: self.nodes_osmid_dict[x])
             od['destin_nid'] = od['destin_osmid'].apply(lambda x: self.nodes_osmid_dict[x])
