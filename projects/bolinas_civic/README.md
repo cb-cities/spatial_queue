@@ -41,3 +41,26 @@
             * It will show output "vehicle is on link 543 at 1800 seconds. The end node ID of the current link is 20".
         * `python -c "import query_path; query_path.query_path(vphh=1.5, visitor_cnts=300, player_origin=20, player_destin=193, start_time=1800, end_time=2700)"`
             * It will show output "vehicle is on link 575 at 2700 seconds. The end node ID of the current link is 193".
+4. Optional: Provide the alternative `write_path` paramter to `run_traffic_simulation.py` and `read_path` to `queue_path.py`. This will create/read from new the directory for the following files:
+   
+    ```
+    +-- demand_inputs
+    |   +-- od_csv
+    |       +-- resident_visitor_od_vphh{vphh}_vistor{vistor_cnts}.csv
+    +-- simulation_outputs
+    |   +-- link_weights
+    |       +-- link_speed_vphh{vphh}_vistor{vistor_cnts}.json
+    |   +-- log
+    |       +-- vphh{vphh}_vistor{vistor_cnts}.log
+    |   +-- network
+    |       +-- modified_network_edges_vphh{vphh}_vistor{vistor_cnts}.csv
+    |       +-- network_links.json
+    |       +-- node2link_dict.json
+    ```
+    `read_path` and `write_path` parameters are added to migrate the simulation code to AWS lambda, which has writing restriction for the file system.
+
+    For example,
+   
+   * `python -c "import run_traffic_simulation; run_traffic_simulation.run_traffic_simulation(vphh=1.5, visitor_cnts=300, write_path='/tmp')"` will force the program to write all above files to `/tmp`.
+        
+    * `python -c "import query_path; query_path.query_path(vphh=1.5, visitor_cnts=300, player_origin=143, player_destin=193, start_time=0, end_time=900, read_path='/tmp')"` will read the required files from the directory `/tmp`.
