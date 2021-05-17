@@ -24,6 +24,9 @@ def get_route(g, origin, destin):
 
 def query_path(vphh=None, visitor_cnts=None, player_origin=None, player_destin=None, start_time=None, end_time=None, read_path = None):
 
+    if read_path == None:
+        read_path = abs_path
+
     ### get graph
     links_df = pd.read_csv(read_path + '/simulation_outputs/network/modified_network_edges_vphh{}_visitor{}.csv'.format(vphh, visitor_cnts))
     network_g = interface.from_dataframe(links_df, 'nid_s', 'nid_e', 'fft')
@@ -39,6 +42,7 @@ def query_path(vphh=None, visitor_cnts=None, player_origin=None, player_destin=N
 
     # all nodes that player passed
     player_nodes = [player_origin]
+    player_nodes_time_traffic = []
     
     for t_p in range(start_time, end_time):
         if t_p > start_time:
@@ -63,8 +67,12 @@ def query_path(vphh=None, visitor_cnts=None, player_origin=None, player_destin=N
             next_node = player_route_by_nodes[network_links[str(current_link)]['end_nid']]
             current_link = node2link_dict[str(network_links[str(current_link)]['end_nid'])][str(next_node)]
             player_nodes.append(network_links[str(current_link)]['end_nid'])
+            player_nodes_time_traffic.append((network_links[str(current_link)]['start_nid'], t_p, link_speed_dict[str(t_p)][current_link]))
             # print('new link {} at {}\n'.format(current_link, t_p))  
+    
     print('vehicle is on link {} at {} seconds. The end node ID of the current link is {}'.format(current_link, end_time, next_node))
     print('Player path nodes {}'.format(player_nodes))
+    print('Player path nodes/time/speed_of_next_link {}'.format(player_nodes_time_traffic))
+    # traffic: light: > 9 m/s, medium: 3-9 m/s, heavy: < 3 m/s
 
-    return player_nodes
+    return player_nodes, player_nodes_time_traffic
