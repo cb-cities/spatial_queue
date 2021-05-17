@@ -8,6 +8,8 @@ import pandas as pd
 import geopandas as gpd 
 from shapely.wkt import loads
 
+from pathlib import Path
+
 ### dir
 home_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -20,7 +22,7 @@ random_seed = 0
 random.seed(random_seed)
 np.random.seed(random_seed)
 
-def preparation(vphh=None, visitor_cnts=None, scen_nm=None):
+def preparation(vphh=None, visitor_cnts=None, scen_nm=None, write_path = None):
     ### logging and global variables
 
     network_file_edges = '/network_inputs/bolinas_edges_sim.csv'
@@ -30,7 +32,7 @@ def preparation(vphh=None, visitor_cnts=None, scen_nm=None):
     simulation_outputs = '/simulation_outputs'
 
     scen_nm = scen_nm
-    logging.basicConfig(filename=home_dir+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO, force=True)
+    logging.basicConfig(filename=write_path+simulation_outputs+'/log/{}.log'.format(scen_nm), filemode='w', format='%(asctime)s - %(message)s', level=logging.INFO, force=True)
     logging.info(scen_nm)
     print('log file created for {}'.format(scen_nm))
 
@@ -38,11 +40,11 @@ def preparation(vphh=None, visitor_cnts=None, scen_nm=None):
     with open(home_dir + network_file_special_nodes) as special_nodes_file:
         special_nodes = json.load(special_nodes_file)
     network = Network()
-    network.dataframe_to_network(project_location='', network_file_edges = network_file_edges, network_file_nodes = network_file_nodes, special_nodes=special_nodes, scen_nm=scen_nm)
+    network.dataframe_to_network(project_location='', network_file_edges = network_file_edges, network_file_nodes = network_file_nodes, special_nodes=special_nodes, scen_nm=scen_nm, write_path = write_path)
     network.add_connectivity()
 
     ### demand
-    network.add_demand(demand_files = demand_files)
+    network.add_demand(demand_files = demand_files, write_path = write_path)
     logging.info('total numbers of agents taken {}'.format(len(network.agents.keys())))
 
     return {'network': network}, {'scen_nm': scen_nm, 'simulation_outputs': simulation_outputs, 'special_nodes': special_nodes}, {}
@@ -136,10 +138,28 @@ def one_step(t, data, config, update_data):
     else:
         return network, 'continue'
 
-def run_traffic_simulation(vphh=None, visitor_cnts=None):
+def run_traffic_simulation(vphh=None, visitor_cnts=None, write_path=None):
+    
+    # write_path is the directory mimicing the directory /simulation_outputs
+    if not write_path:
+        write_path = home_dir
+        demand_write_path = home_dir + '/demand_inputs'
+        print("Writing at default project diretory:", write_path)
+    else:
+        demand_write_path = write_path + '/demand_inputs'
+        print("Writing at alternative diretory:", write_path)
+
+    # Check if all directories are ready
+    Path(write_path).mkdir(parents=True, exist_ok=True)
+    Path(write_path + '/simulation_outputs/link_weights').mkdir(parents=True, exist_ok=True)
+    Path(write_path + '/simulation_outputs/log').mkdir(parents=True, exist_ok=True)
+    Path(write_path + '/simulation_outputs/network').mkdir(parents=True, exist_ok=True)
+    Path(demand_write_path).mkdir(parents=True, exist_ok=True)
+    Path(demand_write_path + '/od_csv').mkdir(parents=True, exist_ok=True)
+
 
     ### generate demand
-    generate_simple_od(vphh=vphh, visitor_cnts=visitor_cnts)
+    generate_simple_od(vphh=vphh, visitor_cnts=visitor_cnts, demand_write_path = demand_write_path)
 
     # base network as the base layer of plotting
     roads_df = pd.read_csv(home_dir + '/network_inputs/bolinas_edges_sim.csv')
@@ -148,7 +168,7 @@ def run_traffic_simulation(vphh=None, visitor_cnts=None):
     # set scenario name
     scen_nm = "vphh{}_visitor{}".format(vphh, visitor_cnts)
 
-    data, config, update_data = preparation(vphh=vphh, visitor_cnts=visitor_cnts, scen_nm=scen_nm)
+    data, config, update_data = preparation(vphh=vphh, visitor_cnts=visitor_cnts, scen_nm=scen_nm, write_path = write_path)
 
     link_speed_dict = dict()
     link_vehicles_dict = dict()
@@ -167,13 +187,13 @@ def run_traffic_simulation(vphh=None, visitor_cnts=None):
         link_vehicles_dict[t] = link_vehicles_array
     # print(link_speed_dict[199][0:10])
 
-    with open(home_dir+'/simulation_outputs/link_weights/link_speed_{}.json'.format(scen_nm), 'w') as outfile:
+    with open(write_path+'/simulation_outputs/link_weights/link_speed_{}.json'.format(scen_nm), 'w') as outfile:
         json.dump(link_speed_dict, outfile, indent=2)
     
     network_links_dict = dict()
     for link_id, link in network.links.items():
         network_links_dict[link_id] = {'start_nid': link.start_nid, 'end_nid': link.end_nid, 'length': link.length}
-    with open(home_dir+'/simulation_outputs/network/network_links.json', 'w') as outfile:
+    with open(write_path+'/simulation_outputs/network/network_links.json', 'w') as outfile:
         json.dump(network_links_dict, outfile, indent=2)
 
     node2link_dict = dict()
@@ -182,5 +202,6 @@ def run_traffic_simulation(vphh=None, visitor_cnts=None):
             node2link_dict[start_nid][end_nid] = link_id
         except KeyError:
             node2link_dict[start_nid] = {end_nid: link_id}
-    with open(home_dir+'/simulation_outputs/network/node2link_dict.json', 'w') as outfile:
+    with open(write_path+'/simulation_outputs/network/node2link_dict.json', 'w') as outfile:
         json.dump(node2link_dict, outfile, indent=2)
+
