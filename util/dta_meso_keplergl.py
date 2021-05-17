@@ -1,4 +1,7 @@
 from keplergl import KeplerGl
+
+import sys
+sys.path.insert(0, '/home/bingyu/Documents/spatial_queue')
 import model.dta_meso_butte as dta_meso
 
 import json
@@ -10,7 +13,7 @@ from shapely.wkt import loads
 import random
 import numpy as np
 
-random_seed = 20
+random_seed = 5
 random.seed(random_seed)
 np.random.seed(random_seed)
 
@@ -100,7 +103,7 @@ def make_map(network):
 
 def main(vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2'):
     # preparation
-    scen_nm = "r{}_v{}_d{}_cl{}_ct{}_ru{}".format(random_seed, vphh_id, dept_id, clos_id, contra_id, rout_id)
+    scen_nm = "new_r{}_v{}_d{}_cl{}_ct{}_ru{}".format(random_seed, vphh_id, dept_id, clos_id, contra_id, rout_id)
     data, config = dta_meso.preparation(random_seed=random_seed, vphh_id=vphh_id, dept_id=dept_id, clos_id=clos_id, contra_id=contra_id, rout_id=rout_id, scen_nm=scen_nm)
 
     fitness=0
@@ -112,7 +115,7 @@ def main(vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2'):
         if t in visualization_t_list:
             # visualization_t_dict[t] = make_map(network)
             map = make_map(network)
-            map.save_to_html(file_name="projects/butte_osmnx/visualization_outputs/map_{}_{}.html".format(scen_nm, t))
+            map.save_to_html(file_name="/home/bingyu/Documents/traffic_data/butte_osmnx/visualization_outputs/map_{}_{}.html".format(scen_nm, t))
 
 if __name__ == "__main__":
-    main(vphh_id='123', dept_id='2', contra_id='4')
+    main()

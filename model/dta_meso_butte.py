@@ -19,15 +19,15 @@ from shapely.geometry import Point
 import scipy.spatial.distance
 ### dir
 home_dir = '/home/bingyu/Documents/spatial_queue' # os.environ['HOME']+'/spatial_queue'
-work_dir = '/home/bingyu/Documents/spatial_queue' # os.environ['WORK']+'/spatial_queue'
-scratch_dir = '/home/bingyu/Documents/spatial_queue/projects/butte_osmnx/simulation_outputs' # os.environ['OUTPUT_FOLDER']
+work_dir = '/home/bingyu/Documents/traffic_data/butte_osmnx' # os.environ['WORK']+'/spatial_queue'
+scratch_dir = '/home/bingyu/Documents/traffic_data/butte_osmnx/simulation_outputs' # os.environ['OUTPUT_FOLDER']
 ### user
 sys.path.insert(0, home_dir)
 import util.haversine as haversine
 from model.queue_class import Network, Node, Link, Agent
 
-random.seed(0)
-np.random.seed(0)
+random.seed(5)
+np.random.seed(5)
 
 # warnings.filterwarnings("error")
 
@@ -351,16 +351,16 @@ def one_step(t, data, config):
 def preparation(random_seed=None, vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2', scen_nm=None):
     ### logging and global variables
 
-    network_file_edges = '/projects/butte_osmnx/network_inputs/butte_edges_sim.csv'
-    network_file_nodes = '/projects/butte_osmnx/network_inputs/butte_nodes_sim.csv'
-    network_file_special_nodes = '/projects/butte_osmnx/network_inputs/butte_special_nodes.json'
-    network_file_edges_raster = '/projects/butte_osmnx/network_inputs/butte_edges_sim.tif'
-    demand_files = ["/projects/butte_osmnx/demand_inputs/od_r{}_vphh{}_dept{}.csv".format(random_seed, vphh_id, dept_id)]
+    network_file_edges = work_dir + '/network_inputs/butte_edges_sim.csv'
+    network_file_nodes = work_dir + '/network_inputs/butte_nodes_sim.csv'
+    network_file_special_nodes = '/network_inputs/butte_special_nodes.json'
+    network_file_edges_raster = '/network_inputs/butte_edges_sim.tif'
+    demand_files = [work_dir + "/demand_inputs/od_r{}_vphh{}_dept{}.csv".format(random_seed, vphh_id, dept_id)]
     simulation_outputs = '' ### scratch_folder
-    project_location = '/projects/butte_osmnx'
+    project_location = work_dir
     if contra_id=='0': cf_files = []
-    elif contra_id=='3': cf_files = ['/projects/butte_osmnx/network_inputs/contraflow_skyway_3.csv']
-    elif contra_id=='4': cf_files = ['/projects/butte_osmnx/network_inputs/contraflow_skyway_4.csv']
+    elif contra_id=='3': cf_files = [work_dir + '/network_inputs/contraflow_skyway_3.csv']
+    elif contra_id=='4': cf_files = [work_dir + '/network_inputs/contraflow_skyway_4.csv']
     else: cf_files = []
     reroute_freq = 300
 
@@ -384,18 +384,18 @@ def preparation(random_seed=None, vphh_id='123', dept_id='2', clos_id='2', contr
     logging.info('total numbers of agents taken {}'.format(len(network.agents.keys())))
 
     ### evacuation zone
-    evacuation_zone_gdf = gpd.read_file(work_dir+'/projects/butte_osmnx/demand_inputs/digitized_evacuation_zone/digitized_evacuation_zone.shp').to_crs('epsg:26910')
+    evacuation_zone_gdf = gpd.read_file(work_dir+'/demand_inputs/digitized_evacuation_zone/digitized_evacuation_zone.shp').to_crs('epsg:26910')
     evacuation_zone_gdf = evacuation_zone_gdf.loc[evacuation_zone_gdf['id']<=14].copy()
     evacuation_zone = evacuation_zone_gdf['geometry'].unary_union
     evacuation_buffer = evacuation_zone_gdf['geometry'].buffer(1609).unary_union
     logging.info('Evacuation zone is {:.2f} km2, considering 1 mile buffer it is {:.2f} km2'.format(evacuation_zone.area/1e6, evacuation_buffer.area/1e6))
 
     ### process the fire information
-    fire_df = pd.read_csv("projects/butte_osmnx/demand_inputs/simulation_fire_locations.csv")
+    fire_df = pd.read_csv(work_dir + "/demand_inputs/simulation_fire_locations.csv")
     fire_df = fire_df[fire_df['type'].isin(['pentz', 'clark', 'neal'])]
     ### fire arrival time
     ### additional fire spread information will be considered later
-    fire_array = rio.open(work_dir + '/projects/butte_osmnx/demand_inputs/fire_cawfe/cawfe_small_spot_fire_r{}_445.tif'.format(random_seed)).read(1)
+    fire_array = rio.open(work_dir + '/demand_inputs/fire_cawfe/cawfe_small_spot_fire_r{}_445.tif'.format(random_seed)).read(1)
     
     ### time step output
     with open(scratch_dir + simulation_outputs + '/t_stats/t_stats_{}.csv'.format(scen_nm), 'w') as t_stats_outfile:
