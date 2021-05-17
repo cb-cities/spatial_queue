@@ -22,16 +22,16 @@ def get_route(g, origin, destin):
         sp.clear()
         return route
 
-def query_path(vphh=None, visitor_cnts=None, player_origin=None, player_destin=None, start_time=None, end_time=None):
+def query_path(vphh=None, visitor_cnts=None, player_origin=None, player_destin=None, start_time=None, end_time=None, read_path = None):
 
     ### get graph
-    links_df = pd.read_csv(abs_path + '/simulation_outputs/network/modified_network_edges_vphh{}_visitor{}.csv'.format(vphh, visitor_cnts))
+    links_df = pd.read_csv(read_path + '/simulation_outputs/network/modified_network_edges_vphh{}_visitor{}.csv'.format(vphh, visitor_cnts))
     network_g = interface.from_dataframe(links_df, 'nid_s', 'nid_e', 'fft')
 
-    network_links = json.load(open(abs_path + '/simulation_outputs/network/network_links.json'))
-    node2link_dict = json.load(open(abs_path + '/simulation_outputs/network/node2link_dict.json'))
+    network_links = json.load(open(read_path + '/simulation_outputs/network/network_links.json'))
+    node2link_dict = json.load(open(read_path + '/simulation_outputs/network/node2link_dict.json'))
 
-    link_speed_dict = json.load(open(abs_path + '/simulation_outputs/link_weights/link_speed_vphh{}_visitor{}.json'.format(vphh, visitor_cnts)))
+    link_speed_dict = json.load(open(read_path + '/simulation_outputs/link_weights/link_speed_vphh{}_visitor{}.json'.format(vphh, visitor_cnts)))
     
     current_link = 'n{}_vl'.format(player_origin)
     current_link_distance = 0
@@ -66,3 +66,5 @@ def query_path(vphh=None, visitor_cnts=None, player_origin=None, player_destin=N
             # print('new link {} at {}\n'.format(current_link, t_p))  
     print('vehicle is on link {} at {} seconds. The end node ID of the current link is {}'.format(current_link, end_time, next_node))
     print('Player path nodes {}'.format(player_nodes))
+
+    return player_nodes
