@@ -2,6 +2,7 @@
 # coding: utf-8
 import os
 import sys
+import json
 import random
 import numpy as np
 import pandas as pd
@@ -31,18 +32,18 @@ class Network:
         self.g = None
         self.agents = {}
         self.agents_stopped = {}
+        self.special_nodes = None
     
-    def dataframe_to_network(self, project_location=None, network_file_edges=None, network_file_nodes=None, cf_files = None, special_nodes=None, scen_nm=None):
+    def dataframe_to_network(self, edges_f=None, nodes_f=None, cf_files = None, special_nodes_f=None):
         
         # nodes
-        print(abs_path)
-        nodes_df = pd.read_csv(network_file_nodes)
+        nodes_df = pd.read_csv(nodes_f)
         nodes_df = gpd.GeoDataFrame(nodes_df, crs='epsg:4326', geometry=[Point(x, y) for (x, y) in zip(nodes_df.lon, nodes_df.lat)]).to_crs('epsg:26910')
         nodes_df['x'] = nodes_df['geometry'].apply(lambda x: x.x)
         nodes_df['y'] = nodes_df['geometry'].apply(lambda x: x.y)
         nodes_df = nodes_df[['nid', 'x', 'y', 'osmid']]
         # edges
-        links_df = pd.read_csv(network_file_edges)
+        links_df = pd.read_csv(edges_f)
         if (cf_files is not None) and len(cf_files)>0:
             for cf_file in cf_files:
                 contraflow_links_df = pd.read_csv(cf_file)
@@ -53,35 +54,28 @@ class Network:
 
         links_df['maxmph'] = np.where(links_df['lanes']==0, 0.00000001, links_df['maxmph'])
         links_df['fft'] = links_df['length']/links_df['maxmph']*2.237
-        # links_df = links_df.iloc[0:1]
-        # set the fft of the longer one in double links to infinite
-        # links_df = links_df.sort_values(by='fft', ascending=True)
-        # links_df['duplicated'] = links_df[['nid_s', 'nid_e']].duplicated()
-        # links_df['fft'] = np.where(links_df['duplicated'], 1e8, links_df['fft'])
-        # links_df = links_df.sort_values(by='eid', ascending=True)
         links_df['capacity'] = 1900*links_df['lanes']
         links_df['capacity'] = np.where(links_df['capacity']==0, 0.01, links_df['capacity'])
-        # print(links_df['geometry'].iloc[0])
         links_df = gpd.GeoDataFrame(links_df, crs='epsg:4326', geometry=links_df['geometry'].map(loads)).to_crs('epsg:26910')
-        # print(links_df.iloc[0])
-        # sys.exit(0)
         links_df = links_df[['eid', 'nid_s', 'nid_e', 'type', 'lanes', 'capacity', 'maxmph', 'fft', 'length', 'geometry']]
-        links_df.to_csv(project_location + '/simulation_outputs/network/modified_network_edges_{}.csv'.format(scen_nm), index=False)
+        # links_df.to_csv(project_location + simulation_outputs + '/network/modified_network_edges_{}.csv'.format(scen_nm), index=False)
         # sys.exit(0)
         
+        ### special nodes
+        self.special_nodes = json.load(open(special_nodes_f))
         ### link closure
-        for closure_link in special_nodes['closure']:
+        for closure_link in self.special_nodes['closure']:
             links_df.loc[links_df['eid']==closure_link, 'fft'] = 1e8
             links_df.loc[links_df['eid']==closure_link, 'maxmph'] = 0.00000001
 
         ### turn restrictions
-        if len(special_nodes['prohibition'].keys())==0: pass
+        if len(self.special_nodes['prohibition'].keys())==0: pass
         else:
             new_nodes = []
             new_links = []
             new_node_id = nodes_df.shape[0]
             new_link_id = links_df.shape[0]
-            for prohibit_node, prohibit_turns in special_nodes['prohibition'].items():
+            for prohibit_node, prohibit_turns in self.special_nodes['prohibition'].items():
                 # node to be removed
                 prohibit_node = int(prohibit_node)
                 # temporarily holding new nodes
@@ -104,9 +98,6 @@ class Network:
                 new_nodes += tmp_start_nodes
                 new_nodes += tmp_end_nodes
                 # prohibit turns
-                # print(prohibit_turns)
-                # print(tmp_start_nodes)
-                # print(tmp_end_nodes)
                 prohibit_turns = [(inlink, outlink) for [inlink, outlink] in prohibit_turns]
                 for start_node in tmp_end_nodes:
                     for end_node in tmp_start_nodes:
@@ -128,10 +119,10 @@ class Network:
             print(nodes_df.shape, new_nodes_df.shape)
             nodes_df = pd.concat([nodes_df, new_nodes_df[['nid', 'x', 'y', 'osmid']]])
             print(nodes_df.shape)
-            nodes_df.to_csv('nodes.csv', index=False)
-            links_df.to_csv('links.csv', index=False)
+            # nodes_df.to_csv('nodes.csv', index=False)
+            # links_df.to_csv('links.csv', index=False)
 
-        ### Convert to mtx
+        ### Convert to graph
         self.g = interface.from_dataframe(links_df, 'nid_s', 'nid_e', 'fft')
 
         ### Create link and node objects
@@ -176,13 +167,14 @@ class Network:
                     turning_angle = turning_angle/np.pi*180
                     node.incoming_links[incoming_link][outgoing_link] = turning_angle
     
-    def add_demand(self, demand_files=None, reroute_pct=0, tow_pct=0):
+    def add_demand(self, ods_fs=None, reroute_pct=0, tow_pct=0):
         all_od_list = []
-        for demand_file in demand_files:
-            od = pd.read_csv(demand_file)
+        for ods_f in ods_fs:
+            od = pd.read_csv(ods_f)
             ### transform OSM based id to graph node id
             od['origin_nid'] = od['origin_osmid'].apply(lambda x: self.nodes_osmid_dict[x])
             od['destin_nid'] = od['destin_osmid'].apply(lambda x: self.nodes_osmid_dict[x])
+            od['dept_time'] = od['dept_time'].astype(int)
             ### assign agent id
             if 'agent_id' not in od.columns: od['agent_id'] = np.arange(od.shape[0])
             ### assign vehicle length
@@ -195,6 +187,8 @@ class Network:
         all_od = pd.concat(all_od_list, sort=False, ignore_index=True)
         all_od = all_od.sample(frac=1).reset_index(drop=True) ### randomly shuffle rows
         print('# agents from file ', all_od.shape[0])
+        # print(all_od['dept_time'].describe())
+        # sys.exit(0)
         # all_od = all_od.iloc[0:3000].copy()
         for row in all_od.itertuples():
             self.agents[getattr(row, 'agent_id')] = Agent(getattr(row, 'agent_id'), getattr(row, 'origin_nid'), getattr(row, 'destin_nid'), getattr(row, 'dept_time'), getattr(row, 'veh_len'), getattr(row, 'gps_reroute'), getattr(row, 'type')) 
@@ -293,7 +287,7 @@ class Node:
         #     if a==79: print('go_veh', self.node_id, a, b, c, agent_id_dict[a].this_link)
         return non_conflict_go_vehicles
 
-    def run_node_model(self, t_now, node_id_dict=None, link_id_dict=None, agent_id_dict=None, node2link_dict=None, transfer_link_pairs=None, special_nodes=None):
+    def run_node_model(self, t_now, node_id_dict=None, link_id_dict=None, agent_id_dict=None, node2link_dict=None, special_nodes=None):
         go_vehicles = self.non_conflict_vehicles( t_now, link_id_dict=link_id_dict, agent_id_dict=agent_id_dict, node2link_dict=node2link_dict, special_nodes=special_nodes)
         # if self.node_id==8205: print(go_vehicles, '\n\n')
         node_move = 0
@@ -493,6 +487,7 @@ class Agent:
         self.fft_distance = 5e7
         self.status = 'unloaded' ### unloaded, enroute, shelter, shelter_arrive, arrive
         self.current_link_enter_time = None
+        self.this_link = None
         self.next_link = None
         self.next_link_end_nid = None ### next link end
 

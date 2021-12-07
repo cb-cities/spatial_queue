@@ -8,6 +8,7 @@ import json
 import random
 import logging 
 import warnings
+from matplotlib.pyplot import close
 import numpy as np
 import pandas as pd 
 import rasterio as rio
@@ -29,8 +30,8 @@ from model.queue_class import Network, Node, Link, Agent
 import warnings
 warnings.filterwarnings('error', message='Creating an ndarray from ragged*')
 
-random.seed(0)
-np.random.seed(0)
+# random.seed(0)
+# np.random.seed(0)
 
 # warnings.filterwarnings("error")
 
@@ -68,12 +69,13 @@ def link_model(t, network, links_raster, link_closed_time=None, closed_mode=None
         # some are closed
         if closed_mode == 'flame':
             closed_links_in_fire_oneside = np.where((fire_array>=t) & (fire_array<t+1) & (flame_array>2), links_raster_oneside, np.nan)
+            closed_links_in_fire_oneside = closed_links_in_fire_oneside[~np.isnan(closed_links_in_fire_oneside)]
         # elif closed_mode == 'tree':
         #     closed_links_in_fire_oneside = np.where((eucalyptus_array==1), links_raster_oneside, np.nan)
         else:
             closed_links_in_fire_oneside = []
-        # closed_links_in_fire_oneside = closed_links_in_fire_oneside[~np.isnan(closed_links_in_fire_oneside)]
         closed_links_in_fire += np.unique(closed_links_in_fire_oneside).tolist()
+        # print(closed_links_in_fire[0:10])
     links_in_fire = set(links_in_fire)
     closed_links_in_fire = set(closed_links_in_fire)
     # print(closed_links_in_fire)
@@ -145,7 +147,7 @@ def one_step(t, data, config, update_data):
 
     network, evacuation_zone, evacuation_buffer, links_raster, fire_array, flame_array, eucalyptus_array = data['network'], data['evacuation_zone'], data['evacuation_buffer'], data['links_raster'], data['fire_array'], data['flame_array'], data['eucalyptus_array']
     
-    scen_nm, simulation_outputs, check_traffic_flow_links, fire_id, comm_id, special_nodes, link_closed_time, closed_mode, shelter_scen_id = config['scen_nm'], config['simulation_outputs'], config['check_traffic_flow_links'], config['fire_id'], config['comm_id'], config['special_nodes'], config['link_closed_time'], config['closed_mode'], config['shelter_scen_id']
+    scen_nm, simulation_outputs, check_traffic_flow_links, fire_id, comm_id, link_closed_time, closed_mode, shelter_scen_id = config['scen_nm'], config['simulation_outputs'], config['check_traffic_flow_links'], config['fire_id'], config['comm_id'], config['link_closed_time'], config['closed_mode'], config['shelter_scen_id']
 
     in_fire_dict, shelter_capacity_122, shelter_capacity_202 = update_data['in_fire_dict'], update_data['shelter_capacity_122'], update_data['shelter_capacity_202']
 
@@ -159,7 +161,7 @@ def one_step(t, data, config, update_data):
     step_fitness = None
     
     ### update link travel time before rerouting
-    reroute_freq_dict = {'1': 300, '2': 900, '3': 1800}
+    reroute_freq_dict = {1: 300, 2: 900, 3: 1800}
     reroute_freq = reroute_freq_dict[comm_id]
     # if (t%reroute_freq==0):
     #     for link in network.links.values():
@@ -216,23 +218,25 @@ def one_step(t, data, config, update_data):
             current_link.congested += 1
             # print(shelter_scen_id, type(shelter_scen_id))
             # sys.exit(0)
-            if (shelter_scen_id=='0'):
+            if (shelter_scen_id==0):
                 if (t-agent.current_link_enter_time>3600*3):# or ((t-agent.current_link_enter_time>3600*0.5) and (current_link.status in ['burning', 'burning_closed']) and (t-current_link.burnt_time>3600*0.5)):
                     agent.status = 'shelter_a1'
-            elif shelter_scen_id=='1':
+            elif shelter_scen_id==1:
                 pass
             else:
                 pass
-        if (shelter_scen_id=='2'):
+        if (shelter_scen_id==2):
             if (agent.current_link_end_nid==122) and (shelter_capacity_122>0):
                 agent.status = 'shelter_park'
                 shelter_capacity_122 -= 1
             elif (agent.current_link_end_nid==202) and (shelter_capacity_202>0):
                 agent.status = 'shelter_park'
                 shelter_capacity_202 -= 1
+            elif (current_link.link_type != 'v') and (agent.current_link_enter_time is not None) and (t-agent.current_link_enter_time>3600*3):# or ((t-agent.current_link_enter_time>3600*0.5) and (current_link.status in ['burning', 'burning_closed']) and (t-current_link.burnt_time>3600*0.5)):
+                agent.status = 'shelter_a1'
             else:
                 pass
-            print('shelter_capacity {}, {}'.format(shelter_capacity_122, shelter_capacity_202))
+            # print('shelter_capacity {}, {}'.format(shelter_capacity_122, shelter_capacity_202))
         ### agents need rerouting
         # initial route 
         if (t==0) or (t%reroute_freq==agent_id%reroute_freq):
@@ -259,7 +263,7 @@ def one_step(t, data, config, update_data):
     ### node model
     t_node_0 = time.time()
     check_traffic_flow_links_dict = {link_pair: 0 for link_pair in check_traffic_flow_links}
-    network, move, check_traffic_flow_links_dict = node_model(t, network, move, check_traffic_flow_links_dict, special_nodes=special_nodes)
+    network, move, check_traffic_flow_links_dict = node_model(t, network, move, check_traffic_flow_links_dict, special_nodes=network.special_nodes)
     t_node_1 = time.time()
 
     ### metrics
@@ -350,8 +354,8 @@ def preparation(random_seed=0, fire_id=None, comm_id=None, vphh=None, visitor_cn
     demand_files = [project_location + '/demand_inputs/od_csv/resident_visitor_od_rs{}_commscen{}_vphh{}_visitor{}.csv'.format(random_seed, comm_id, vphh, visitor_cnts)]
     simulation_outputs = '' ### scratch_folder
    
-    if contra_id=='0': cf_files = []
-    elif contra_id=='1': cf_files = [project_location + '/network_inputs/bolinas_contraflow.csv']
+    if contra_id==0: cf_files = []
+    elif contra_id==1: cf_files = [project_location + '/network_inputs/bolinas_contraflow.csv']
     else: cf_files = []
 
     scen_nm = scen_nm
@@ -361,14 +365,14 @@ def preparation(random_seed=0, fire_id=None, comm_id=None, vphh=None, visitor_cn
 
     ### network
     links_raster = [rio.open(network_file_edges_raster1).read(1), rio.open(network_file_edges_raster2).read(1)]
-    with open(network_file_special_nodes) as special_nodes_file:
-        special_nodes = json.load(special_nodes_file)
+    # with open(network_file_special_nodes) as special_nodes_file:
+    #     special_nodes = json.load(special_nodes_file)
     network = Network()
-    network.dataframe_to_network(project_location=project_location, network_file_edges = network_file_edges, network_file_nodes = network_file_nodes, cf_files = cf_files, special_nodes=special_nodes, scen_nm=scen_nm)
+    network.dataframe_to_network(edges_f = network_file_edges, nodes_f = network_file_nodes, cf_files = cf_files, special_nodes_f=network_file_special_nodes)
     network.add_connectivity()
 
     ### demand
-    network.add_demand(demand_files = demand_files)
+    network.add_demand(ods_fs = demand_files)
     logging.info('total numbers of agents taken {}'.format(len(network.agents.keys())))
 
     ### evacuation zone
@@ -398,7 +402,7 @@ def preparation(random_seed=0, fire_id=None, comm_id=None, vphh=None, visitor_cn
     #     scen_nm), 'w') as transfer_stats_outfile:
     #     transfer_stats_outfile.write("t,"+",".join(['{}-{}'.format(il, ol) for (il, ol) in check_traffic_flow_links])+"\n")
 
-    return {'network': network, 'evacuation_zone': evacuation_zone, 'evacuation_buffer': evacuation_buffer, 'links_raster': links_raster, 'fire_array': fire_array, 'flame_array': flame_array, 'eucalyptus_array': eucalyptus_array}, {'check_traffic_flow_links': check_traffic_flow_links, 'scen_nm': scen_nm, 'simulation_outputs': simulation_outputs, 'fire_id': fire_id, 'comm_id': comm_id, 'special_nodes': special_nodes, 'link_closed_time': link_closed_time, 'closed_mode': closed_mode, 'shelter_scen_id': shelter_scen_id}, {'in_fire_dict': {}, 'shelter_capacity_122': 200, 'shelter_capacity_202': 100}
+    return {'network': network, 'evacuation_zone': evacuation_zone, 'evacuation_buffer': evacuation_buffer, 'links_raster': links_raster, 'fire_array': fire_array, 'flame_array': flame_array, 'eucalyptus_array': eucalyptus_array}, {'check_traffic_flow_links': check_traffic_flow_links, 'scen_nm': scen_nm, 'simulation_outputs': simulation_outputs, 'fire_id': fire_id, 'comm_id': comm_id, 'link_closed_time': link_closed_time, 'closed_mode': closed_mode, 'shelter_scen_id': shelter_scen_id}, {'in_fire_dict': {}, 'shelter_capacity_122': 300, 'shelter_capacity_202': 0}
 
 # def main(random_seed=None, dept_time_col=None):
     

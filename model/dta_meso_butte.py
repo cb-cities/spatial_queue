@@ -348,7 +348,7 @@ def one_step(t, data, config):
         logging.info(" ".join([str(i) for i in [t, arrival_cnts, active1_shelter_cnts, active2_shelter_cnts, passive_shelter_cnts, move, congested, '|', len(burning_links), len(burning_closed_links), len(burnt_over_links), len(closed_links), '|', round(avg_fire_dist,2), in_fire_cnts, outside_evacuation_zone_cnts, outside_evacuation_buffer_cnts, round(t_agent_1-t_agent_0, 2), round(t_node_1-t_node_0, 2), round(t_link_1-t_link_0, 2)]]) + " " + str(len(veh_loc)))
     return step_fitness, network
 
-def preparation(random_seed=None, vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2', scen_nm=None):
+def preparation(random_seed=None, vphh_id='123', dept_id='2', clos_id='2', contra_id='0', rout_id='2', scen_nm=None):+
     ### logging and global variables
 
     network_file_edges = work_dir + '/network_inputs/butte_edges_sim.csv'
