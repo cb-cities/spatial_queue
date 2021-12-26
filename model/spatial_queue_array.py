@@ -1,336 +1,386 @@
 #!/usr/bin/env python
 # coding: utf-8
-import os
-import sys
-import json
-import random
+import os, sys
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-from random import shuffle
-from ctypes import c_double
 from shapely.wkt import loads
-from shapely.ops import split
-from shapely.geometry import Point
-from shapely.geometry import LineString
+from shapely.geometry import Point, LineString
 
+### usr
 abs_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, abs_path)
 sys.path.insert(0, "/home/bingyu/Documents")
 from sp import interface
 
-# import swifter
-import multiprocessing
-
 np.random.seed(0)
 global movement_order
 
-if __name__ == ('__main__'):
-    import logging
-
-def create_network(edges_f=None, nodes_f=None, special_nodes_f=None, ods_fs = None):
-
-    nodes_df = pd.read_csv(nodes_f)
-    edges_df = pd.read_csv(edges_f)
-    ods_df = pd.concat([pd.read_csv(ods_f) for ods_f in ods_fs])
-
-    ### nodes
-    nodes_df['node_type'] = 'r'
-    nodes_df = gpd.GeoDataFrame(nodes_df, crs='epsg:4326', geometry=[Point(xy) for xy in zip(nodes_df.lon, nodes_df.lat)]).to_crs('epsg:3857')
-    nodes_df['x'] = nodes_df.geometry.x
-    nodes_df['y'] = nodes_df.geometry.y
-    nodes_df['osmid'] = nodes_df['osmid'].astype(str)
-
-    ### edges
-    edges_df['edge_type'] = 'r'
-    edges_df = gpd.GeoDataFrame(edges_df, crs='epsg:4326', geometry=edges_df['geometry'].map(loads)).to_crs('epsg:3857')
-    link_out_angle = dict()
-    link_in_angle = dict()
-    link_out_coord = dict()
-    link_in_coord = dict()
-    for link in edges_df.itertuples():
-        link_id = getattr(link, 'eid')
-        link_geometry = getattr(link, 'geometry')
-        link_ss = link.geometry.interpolate(0.01, normalized=True)
-        link_ee = link.geometry.interpolate(0.99, normalized=True)
-        (link_sx, link_sy) = link_geometry.coords[0]
-        (link_ex, link_ey) = link_geometry.coords[-1]
-        link_ssx, link_ssy = link_ss.x, link_ss.y
-        link_eex, link_eey = link_ee.x, link_ee.y
-        link_in_angle[link_id] = np.arctan2(link_ssy-link_sy, link_ssx-link_sx)
-        link_out_angle[link_id] = np.arctan2(link_ey-link_eey, link_ex-link_eex)
-        link_in_coord[link_id] = [link_ssx + (-link_sy+link_ssy), link_ssy - (-link_sx+link_ssx)]
-        link_out_coord[link_id] = [link_eex + (link_ey-link_eey), link_eey - (link_ex-link_eex)]
-
-    ### demand
-
-    ### virtual nodes and edges
-    virtual_nodes_df = nodes_df.loc[nodes_df['osmid'].isin(np.unique(ods_df['origin_osmid'].astype(str)))].copy()
-    node_evaczone_dict = {getattr(n, 'nid'): getattr(n, 'evac_zone') for n in nodes_df.itertuples()}
-    virtual_nodes_df['evac_zone'] = virtual_nodes_df['nid'].map(node_evaczone_dict)
-    virtual_nodes_df['nid'] = virtual_nodes_df['nid'].apply(lambda x: 'v{}'.format(x))
-    virtual_nodes_df['node_type'] = 'v'
-    virtual_nodes_df['x'] += 1
-    virtual_nodes_df['y'] += 1
-    nodes_df = pd.concat([nodes_df, virtual_nodes_df])
-
-    virtual_edges_df = virtual_nodes_df[['nid', 'x', 'y']].copy()
-    virtual_edges_df['nid_s'] = virtual_edges_df['nid']
-    virtual_edges_df['nid_e'] = virtual_edges_df['nid_s'].apply(lambda x: int(x.replace('v', ''))) ### remove the 'v' from node id
-    virtual_edges_df['eid'] = edges_df['eid'].shape[0] + np.arange(virtual_edges_df.shape[0])
-    virtual_edges_df['edge_type'] = 'v'
-    virtual_edges_df['length'] = 1
-    virtual_edges_df['maxmph'] = 1000
-    virtual_edges_df['lanes'] = 1e5
-    virtual_edges_df['evac_zone'] = virtual_edges_df['nid_e'].map(node_evaczone_dict)
-    virtual_edges_df['geometry'] = virtual_edges_df.apply(lambda e: LineString([(e['x'], e['y']), (e['x']-1, e['y']-1)]), axis=1)
-    edge_columns = ['eid', 'nid_s', 'nid_e', 'edge_type', 'length', 'maxmph', 'lanes', 'evac_zone', 'geometry']
-    edges_df = pd.concat([edges_df[edge_columns], virtual_edges_df[edge_columns]])
-    # print(edges_df.head())
-
-    edges_df['fft'] = edges_df['length']/edges_df['maxmph']*2.237
-    edges_df['travel_time'] = edges_df['fft']
-    edges_df['in_capacity'] = edges_df['lanes'] * 2000/3600
-    edges_df['out_capacity'] = edges_df['lanes'] * 2000/3600
-    edges_df['storage'] = edges_df['length'] * edges_df['lanes']
-    edges_df['enter'] = 0
-    g = interface.from_dataframe(edges_df[edges_df['edge_type']=='r'], 'nid_s', 'nid_e', 'fft')
-    edge_nid_dict = {(getattr(edge, 'nid_s'), getattr(edge, 'nid_e')): getattr(edge, 'eid') for edge in edges_df.itertuples()}
-    edge_fft_dict = {getattr(edge, 'eid'): getattr(edge, 'fft') for edge in edges_df.itertuples()}
-    # edge_lanes_dict = {getattr(edge, 'eid'): getattr(edge, 'lanes') for edge in edges_df.itertuples()}
-    # edge_capacity_dict = {getattr(edge, 'eid'): getattr(edge, 'in_capacity') for edge in edges_df.itertuples()}
-
-    def ccw(A, B, C):
-        return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
+class Network:
+    def __init__(self):
+        self.nodes = None
+        self.links = None
+        ### no conflict movement directions by node
+        self.no_conflict_moves = dict()
+        ### simulation/shortest path network
+        self.g = None
+        ### some frequently used columns
+        self.link_nid_dict = dict()
+        self.link_length_dict = dict()
+        self.link_fft_dict = dict()
+        self.link_lanes_dict = dict()
     
-    def intersect(A, B, C, D):
-        ### returns true if line segments AB and CD intersect
-        return ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
-    
-    def intersection_movements():
-        
-        incoming_links = {n: [] for n in nodes_df['nid'].values.tolist()}
-        outgoing_links = {n: [] for n in nodes_df['nid'].values.tolist()}
-        nodes_movements = dict()
-        movement_order = dict()
+    def prepare_nodes(self, nodes_df, ods_df):
+        ### nodes_df must contain the following columns
+        self.nodes = nodes_df[['node_id', 'lon', 'lat']].copy()
+        self.nodes['node_type'] = 'real'
 
-        for link in edges_df.itertuples():
-            link_id = getattr(link, 'eid')
-            incoming_links[getattr(link, 'nid_e')].append(link_id)
-            outgoing_links[getattr(link, 'nid_s')].append(link_id)
+        ### add virtual nodes
+        virtual_nodes_df = self.nodes.loc[self.nodes['node_id'].isin(np.unique(ods_df['origin_nid']))].copy()
+        virtual_nodes_df['node_id'] = virtual_nodes_df['node_id'].apply(lambda x: 'vn_{}'.format(x))
+        virtual_nodes_df['node_type'] = 'virtual'
+        self.nodes = pd.concat([self.nodes, virtual_nodes_df])
+        return virtual_nodes_df
+    
+    def prepare_links(self, links_df, virtual_nodes_df):
+        ### links must contain the following columns; geometry must be in epsg:4326
+        self.links = links_df[['link_id', 'start_node_id', 'end_node_id', 'geometry']].copy()
+        self.links['link_type'] = 'real'
         
-        for node in nodes_df.itertuples():
-            node_id = getattr(node, 'nid')
+        ### add attributes
+        self.links = gpd.GeoDataFrame(self.links, crs='epsg:4326', geometry=links_df['geometry'].map(loads)).to_crs('epsg:3857')
+        try: self.links['length'] = links_df['length'] 
+        except KeyError:
+            self.links['length'] = self.links['geometry'].length
+            print('link length not specified; derive from geometry instead.')
+        try: self.links['maxmph'] = links_df['maxmph']
+        except KeyError:
+            self.links['maxmph'] = 25
+            print('link speed limit (mph); use 25mph.')
+        try: self.links['lanes'] = links_df['lanes']
+        except KeyError:
+            self.links['lanes'] = 1
+            print('link length not specified; assume one lane.')
+        
+        ### add virtual links
+        virtual_links_df = virtual_nodes_df[['node_id', 'lon', 'lat']].copy()
+        virtual_links_df['start_node_id'] = virtual_links_df['node_id']
+        virtual_links_df['end_node_id'] = virtual_links_df['node_id'].apply(lambda x: int(x.replace('vn_', ''))) ### remove the 'vn_' from node id
+        virtual_links_df['link_id'] = virtual_links_df['node_id'].apply(lambda x: x.replace('vn_', 'vl_'))
+        virtual_links_df['link_type'] = 'virtual'
+        virtual_links_df['geometry'] = None
+        virtual_links_df['length'] = 1
+        virtual_links_df['maxmph'] = 1000
+        virtual_links_df['lanes'] = 1e8
+
+        ### add other attributes
+        self.links = pd.concat([self.links, virtual_links_df[self.links.columns]])
+        self.links['fft'] = self.links['length']/(self.links['maxmph']*1609/3600)
+        self.links['capacity'] = self.links['lanes'] * 2000/3600
+        self.links['storage'] = self.links['length'] * self.links['lanes']
+        self.links['storage'] = np.where(self.links['storage']<16, 16, self.links['storage'])
+        self.links = self.links[['link_id', 'start_node_id', 'end_node_id', 'link_type', 'length', 'lanes', 'maxmph', 'fft', 'capacity', 'storage', 'geometry']]
+ 
+    def node_movements(self):
+
+        link_out_coord = dict()
+        link_in_coord = dict()
+        for link in self.links[self.links['link_type']=='real'].itertuples():
+            link_id = getattr(link, 'link_id')
+            link_geometry = getattr(link, 'geometry')
+            link_ss = link.geometry.interpolate(0.01, normalized=True)
+            link_ee = link.geometry.interpolate(0.99, normalized=True)
+            ### link start coordinates
+            (link_sx, link_sy) = link_geometry.coords[0]
+            ### link end coordinates
+            (link_ex, link_ey) = link_geometry.coords[-1]
+            ### near start coordinates
+            (link_ssx, link_ssy) = link_ss.coords[0]
+            ### near end coordinates
+            (link_eex, link_eey) = link_ee.coords[0]
+            ### off-set from center line
+            link_in_coord[link_id] = [link_ssx + (-link_sy+link_ssy), link_ssy - (-link_sx+link_ssx)]
+            link_out_coord[link_id] = [link_eex + (link_ey-link_eey), link_eey - (link_ex-link_eex)]
+
+        def ccw(A, B, C):
+            return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
+        
+        def intersect(A, B, C, D):
+            ### returns true if line segments AB and CD intersect
+            return ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
+            
+        incoming_links = {n: [] for n in self.nodes['node_id'].values.tolist()}
+        outgoing_links = {n: [] for n in self.nodes['node_id'].values.tolist()}
+
+        for link in self.links[self.links['link_type']=='real'].itertuples():
+            link_id = getattr(link, 'link_id')
+            incoming_links[getattr(link, 'end_node_id')].append(link_id)
+            outgoing_links[getattr(link, 'start_node_id')].append(link_id)
+            
+        for node in self.nodes.itertuples():
+            node_id = getattr(node, 'node_id')
             node_movements_info = dict()
             for il in incoming_links[node_id]:
                 for ol in outgoing_links[node_id]:
-                    try:
-                        ila, ola, ilc, olc = link_out_angle[il], link_in_angle[ol], link_out_coord[il], link_in_coord[ol]
-                        node_movements_info[(il, ol)] = ila, ola, ilc, olc
-                        movement_order[(il, ol)] = 1
-                        if ila < 0: ila += 360
-                        if ola < 0: ola += 360
-                        if (ola-ila > 45) and (ola-ila < 135): movement_order[(il, ol)] = 2
-                        if (ila-ola > 135) and (ila-ola < 315): movement_order[(il, ol)] = 2
-                    except KeyError:
-                        node_movements_info[(il, ol)] = 'v', 'v', 'v', 'v'
-                        movement_order[(il, ol)] = 3
-            for (il, ol), [ila, ola, ilc, olc] in node_movements_info.items():
-                # nodes_movements['{}-{}'.format(il, ol)] = dict()
-                for (il_, ol_), [ila_, ola_, ilc_, olc_] in node_movements_info.items():
+                    ### virtual incoming links not considered here
+                    ilc, olc = link_out_coord[il], link_in_coord[ol]
+                    node_movements_info[(il, ol)] = ilc, olc
+            ### pair-wise evaluation of movements in this intersection
+            for (il, ol), [ilc, olc] in node_movements_info.items():
+                for (il_, ol_), [ilc_, olc_] in node_movements_info.items():
                     if (il==il_) and (ol==ol_):
-                        continue
-                    elif (ilc=='v') or (ilc_=='v'):
-                        ### virtual links
-                        nodes_movements[(il, ol, il_, ol_)] = 1
+                        ### same direction can go together
+                        self.no_conflict_moves[(il, ol, il_, ol_)] = 1
                     elif intersect(ilc, olc, ilc_, olc_):
+                        ### paths intersect cannot go together
                         continue
                     else:
-                        nodes_movements[(il, ol, il_, ol_)] = 1
-        return nodes_movements, movement_order
-
-    nodes_movements, movement_order = intersection_movements()
-
-    return edges_df, nodes_df, ods_df, g, edge_nid_dict, edge_fft_dict, nodes_movements, movement_order
-
-def create_agents(ods_df, nodes_df, edge_nid_dict):
-
-    osmid2nid_dict = {getattr(node, 'osmid'): getattr(node, 'nid') for node in nodes_df[nodes_df['node_type']!='v'].itertuples()}
-
-    agents_df = ods_df
-    agents_df['agent_id'] = np.arange(agents_df.shape[0])
-    agents_df['origin_nid'] = agents_df['origin_osmid'].astype(str).map(osmid2nid_dict)
-    agents_df['destin_osmid'] = 'vsink_chico'
-    agents_df['destin_nid'] = agents_df['destin_osmid'].map(osmid2nid_dict)
-    agents_df['cl_enid'] = agents_df['origin_nid']
-    agents_df['cl_snid'] = agents_df['origin_nid'].apply(lambda x: 'v{}'.format(x))
-    agents_df['current_link'] = agents_df.set_index(['cl_snid', 'cl_enid']).index.map(edge_nid_dict)
-    agents_df['cl_fft'] = np.nan
-    agents_df['next_link'] = np.nan
-    agents_df['onlink_status'] = 0 ### 0: empty; 1: run; 2: queue
-    agents_df['agent_status'] = 0 ### 0: unloaded; 1: enroute; 2: shelter; -1: arrive
-    agents_df['current_link_enter_time'] = np.nan
-    agents_df = agents_df[['agent_id', 'origin_nid', 'destin_nid', 'evac_zone', 'agent_status', 'onlink_status', 'current_link', 'current_link_enter_time', 'cl_fft', 'cl_enid', 'next_link']]
-
-    return agents_df
-
-# @profile
-def load_agents(agents_df, agent_routes, edge_nid_dict, t):
+                        ### no intersection in path can go together
+                        self.no_conflict_moves[(il, ol, il_, ol_)] = 1
     
-    ### load agent
-    load_ids = t == agents_df['departure_time']
-    if np.sum(load_ids) == 0:
-        return agents_df
+    def prepare_network(self, nodes_df, links_df, ods_df):
+        
+        ### add virtual nodes and virtual links
+        ### only return virtual nodes as it will be used in the creation of virtual links in the next function
+        virtual_nodes_df = self.prepare_nodes(nodes_df, ods_df) 
+        self.prepare_links(links_df, virtual_nodes_df)
+        
+        ### find no conflict movements
+        self.node_movements()
 
-    agents_df.loc[load_ids, 'cl_fft'] = 0
-    agents_df.loc[load_ids, 'nl_enid'] = agents_df.loc[load_ids].apply(lambda a: agent_routes[getattr(a, 'agent_id')][getattr(a, 'cl_enid')], axis=1)
-    agents_df.loc[load_ids, 'next_link'] = agents_df.loc[load_ids].set_index(['cl_enid', 'nl_enid']).index.map(edge_nid_dict)
-    agents_df['onlink_status'] = np.where(load_ids, 1, agents_df['onlink_status'])
-    agents_df['agent_status'] = np.where(load_ids, 1, agents_df['agent_status'])
-    agents_df['current_link_enter_time'] = np.where(load_ids, t, agents_df['current_link_enter_time'])
-    
-    return agents_df
+        ### some lookup or calculation variables
+        self.g = interface.from_dataframe(self.links[self.links['link_type']=='real'], 'start_node_id', 'end_node_id', 'fft')
+        self.link_nid_dict = {(getattr(link, 'start_node_id'), getattr(link, 'end_node_id')): getattr(link, 'link_id') for link in self.links.itertuples()}
+        self.link_length_dict = {getattr(link, 'link_id'): getattr(link, 'length') for link in self.links.itertuples()}
+        self.link_lanes_dict = {getattr(link, 'link_id'): getattr(link, 'lanes') for link in self.links.itertuples()}
+        self.link_fft_dict = {getattr(link, 'link_id'): getattr(link, 'fft') for link in self.links.itertuples()}
 
-# @profile
-def link_update(agents_df, edges_df, g, t):
+    def find_next_link(self, agent, agent_routes, just_loaded=False):
+        agent_id = getattr(agent, 'agent_id')
+        agent_cl_enid = getattr(agent, 'cl_enid')
+        ### just loaded
+        if just_loaded:
+            just_loaded_nl_enid = agent_routes[agent_id][agent_cl_enid]
+            just_loaded_nl = self.link_nid_dict[(agent_cl_enid, just_loaded_nl_enid)]
+            just_loaded_nl_fft = self.link_fft_dict[just_loaded_nl]
+            return ['vl_{}'.format(agent_cl_enid), 'vn_{}'.format(agent_cl_enid), agent_cl_enid, 0.1, 1e8, just_loaded_nl, just_loaded_nl_enid, just_loaded_nl_fft]
+        ### current link end is destination
+        if agent_cl_enid == getattr(agent, 'destin_nid'):
+            return ['vl_sink', agent_cl_enid, 'sink_node', 0.1, 1e8, None, None, None]
+        agent_nl_enid = getattr(agent, 'nl_enid') #agent_routes[agent_id][agent_cl_enid]
+        agent_nl = getattr(agent, 'next_link') #self.link_nid_dict[(agent_cl_enid, agent_nl_enid)]
+        agent_nl_fft = self.link_fft_dict[agent_nl]
+        agent_nl_lanes = self.link_lanes_dict[agent_nl]
+        ### next link end is destination, next next link does not exist
+        if agent_nl_enid == getattr(agent, 'destin_nid'):
+            return [agent_nl, agent_cl_enid, agent_nl_enid, agent_nl_fft, agent_nl_lanes, 'vl_sink', 'sink_node', 1e8]
+        agent_nnl_enid = agent_routes[agent_id][agent_nl_enid]
+        agent_nnl = self.link_nid_dict[(agent_nl_enid, agent_nnl_enid)]
+        agent_nnl_lanes = self.link_lanes_dict[agent_nnl]
+        return [agent_nl, agent_cl_enid, agent_nl_enid, agent_nl_fft, agent_nl_lanes, agent_nnl, agent_nnl_enid, agent_nnl_lanes]
 
-    link_undeparted_dict = agents_df.loc[agents_df['onlink_status']==0].groupby('current_link').size().to_dict()
-    link_queue_dict = agents_df.loc[agents_df['onlink_status']==2].groupby('current_link').size().to_dict()
-    link_run_dict = agents_df.loc[agents_df['onlink_status']==1].groupby('current_link').size().to_dict()
-    link_enter_dict = agents_df.loc[agents_df['current_link_enter_time']==(t-1)].groupby('current_link').size().to_dict()
-    edges_df['undeparted'] = edges_df['eid'].map(link_undeparted_dict).fillna(0)
-    edges_df['queue'] = edges_df['eid'].map(link_queue_dict).fillna(0)
-    edges_df['run'] = edges_df['eid'].map(link_run_dict).fillna(0)
-    edges_df['storage_remain'] = edges_df['storage'] - (edges_df['run'] + edges_df['queue'])*8
-    edges_df['enter'] += edges_df['eid'].map(link_enter_dict).fillna(0)
-    
-    # if t%300 == 0:
-    #     new_travel_time = edges_df['queue']/ (edges_df['out_capacity'] + 0.1) + edges_df['fft']
-    #     edges_to_update = np.abs(edges_df['travel_time']-new_travel_time)>10
-    #     edges_df.loc[edges_to_update, 'travel_time'] = new_travel_time[edges_to_update] 
-    #     for e in edges_df.loc[edges_to_update].itertuples():
-    #         g.update_edge(getattr(e, 'nid_s'), getattr(e, 'nid_e'), c_double(getattr(e, 'travel_time')))
-    
-    return edges_df, g 
+    def run_link_model(self, agents=None, t=None):
 
-# def f(k):
-#     return movement_order.get(k)
+        agents_df = agents.agents
+        
+        ### running vehicles joins queue
+        agents_df['agent_status'] = np.where(
+            (agents_df['agent_status']==1) &
+            (agents_df['cl_fft']<(t-agents_df['current_link_enter_time'])),
+            2, agents_df['agent_status'])
 
-# @profile
-def node_model(agents_df, edges_df, agent_routes, edge_nid_dict, edge_fft_dict, no_conflict_movement, movement_order, t):
-    
-    ### queue vehicles
-    agents_df['onlink_status'] = np.where((agents_df['agent_status']==1) & (agents_df['cl_fft']<(t-agents_df['current_link_enter_time'])), 2, agents_df['onlink_status'])
-    queue_agents_df = agents_df[agents_df['onlink_status']==2].copy().reset_index(drop=True)
-    if queue_agents_df.shape[0] == 0:
+        ### summarize from agents_df
+        link_undeparted_dict = agents_df.loc[agents_df['agent_status']==0].groupby('current_link').size().to_dict()
+        link_queue_dict = agents_df.loc[agents_df['agent_status']==2].groupby('current_link').size().to_dict()
+        link_run_dict = agents_df.loc[agents_df['agent_status']==1].groupby('current_link').size().to_dict()
+ 
+        ### update links
+        self.links['undeparted'] = self.links['link_id'].map(link_undeparted_dict).fillna(0)
+        self.links['queue'] = self.links['link_id'].map(link_queue_dict).fillna(0)
+        self.links['run'] = self.links['link_id'].map(link_run_dict).fillna(0)
+        self.links['storage_remain'] = self.links['storage'] - (self.links['run'] + self.links['queue'])*8
+
         return agents_df
     
-    # with multiprocessing.Pool(processes=4) as pool:
-    #     res = pool.map(f, queue_agents_df[['current_link', 'next_link']].to_records(index=False).tolist())
-    
-    # queue_agents_df['agent_movement_order'] = res
+    def run_node_model(self, agents=None, t=None):
+        
+        agents_df = agents.agents
+        agent_routes = agents.agent_routes
+        
+        ### queue vehicles
+        queue_agents_df = agents_df[
+            agents_df['agent_status']==2].copy().reset_index(drop=True)
+        if queue_agents_df.shape[0] == 0:
+            ### no queuing agents 
+            return agents_df
 
-    queue_agents_df['agent_movement_order'] = list(map(movement_order.get, queue_agents_df[['current_link', 'next_link']].to_records(index=False).tolist()))
-    queue_agents_df['agent_movement_order'] = queue_agents_df['agent_movement_order'].fillna(4) ### if not calculated, set the order to the lowest
+        ### determine which queued vehicles are at the front
+        links_to_use_df = self.links.loc[(self.links['link_type']=='real') & (self.links['link_id'].isin(queue_agents_df['current_link']) | self.links['link_id'].isin(queue_agents_df['next_link']))]
+        ### storage_remain
+        links_storage_remain_dict = dict(zip(links_to_use_df['link_id'], links_to_use_df['storage_remain']))
+        ### capacity, random each time
+        capacity_array = np.floor(links_to_use_df['capacity'] + np.random.random(size=links_to_use_df.shape[0]))
+        links_capacity_dict = dict(zip(links_to_use_df['link_id'], capacity_array))
+        
+        ### no constraints if not in dictionary; meaning the links are either virtual source or sink
+        ### storage capacity and flow capacity are updated every time step
+        ### other attributes that are not updated every step are obtained through find_next_link(), e.g., lanes, fft.
+        queue_agents_df['nl_storage_remain'] = queue_agents_df['next_link'].map(links_storage_remain_dict).fillna(1e5)
+        queue_agents_df['cl_out_capacity'] = queue_agents_df['current_link'].map(links_capacity_dict).fillna(1e5)
+        queue_agents_df['nl_in_capacity'] = queue_agents_df['next_link'].map(links_capacity_dict).fillna(1e5)
+        
+        ### filter for front agents by output capacity of the current link 
+        queue_agents_df['current_link_queue_time'] = t - queue_agents_df['cl_fft'] - queue_agents_df['current_link_enter_time']
+        queue_agents_df['cl_position'] = queue_agents_df.sort_values(by='current_link_queue_time', ascending=True).groupby('current_link', sort=False).cumcount()
+        ### filter for front agents by input capacity of the next link
+        queue_agents_df['nl_position'] = queue_agents_df.sort_values(by='current_link_queue_time', ascending=True).groupby('next_link', sort=False).cumcount()
+        ### really at the front
+        queue_agents_df = queue_agents_df.loc[
+            (queue_agents_df['cl_position']<queue_agents_df['cl_lanes']) 
+            & (queue_agents_df['cl_position']<queue_agents_df['cl_out_capacity'])
+            & (queue_agents_df['nl_position']<queue_agents_df['nl_lanes'])
+            & (queue_agents_df['nl_position']<queue_agents_df['nl_in_capacity'])
+            & (queue_agents_df['nl_position']*8 < queue_agents_df['nl_storage_remain'])
+            ].copy()
+        if queue_agents_df.shape[0] == 0:
+            return agents_df
 
-    edges_to_use_df = edges_df.loc[edges_df['eid'].isin(queue_agents_df['current_link']) | edges_df['eid'].isin(queue_agents_df['next_link'])]
-    edges_storage_remain_dict = dict(zip(edges_to_use_df['eid'], edges_to_use_df['storage_remain']))
-    edges_storage_remain_dict[-1] = 1e5
-    edges_lanes_dict = dict(zip(edges_to_use_df['eid'], edges_to_use_df['lanes']))
-    edges_lanes_dict[-1] = 1e5
-    edges_capacity_dict = dict(zip(edges_to_use_df['eid'], edges_to_use_df['in_capacity']))
-    edges_capacity_dict[-1] = 1e5
-    queue_agents_df['nl_storage_remain'] = queue_agents_df['next_link'].map(edges_storage_remain_dict)
-    queue_agents_df['cl_lanes'] = queue_agents_df['current_link'].map(edges_lanes_dict)
-    queue_agents_df['nl_lanes'] = queue_agents_df['next_link'].map(edges_lanes_dict)
-    queue_agents_df['cl_out_capacity'] = queue_agents_df['current_link'].map(edges_capacity_dict)
-    queue_agents_df['nl_in_capacity'] = queue_agents_df['next_link'].map(edges_capacity_dict)
+        ### go vehcles: primary vehicles (first arrive at stop sign) plus non conflict
+        go_agents_df = queue_agents_df.copy()
+        go_agents_df = go_agents_df.sort_values(by='current_link_enter_time', ascending=True)
+        go_agents_df['primary_cl'] = go_agents_df.groupby('cl_enid', sort=False)['current_link'].transform('first')
+        go_agents_df['primary_nl'] = go_agents_df.groupby('cl_enid', sort=False)['next_link'].transform('first')
+        ### label non-conflict movements
+        go_agents_df['no_conflict'] = list(map(self.no_conflict_moves.get, go_agents_df[['primary_cl', 'primary_nl', 'current_link', 'next_link']].to_records(index=False).tolist()))
+        ### Cming from virtual source or going to virtual sink. Assume no conflict with any direction.
+        go_agents_df['no_conflict'] = np.where(
+            (go_agents_df['cl_enid']==go_agents_df['origin_nid']) | 
+            (go_agents_df['cl_enid']==go_agents_df['destin_nid']), 1, go_agents_df['no_conflict'])
+        ### no conflict if has the same movement as the primary movement
+        go_agents_df = go_agents_df.loc[go_agents_df['no_conflict']==1]
+        go_ids = go_agents_df['agent_id']
+        if go_agents_df.shape[0] == 0:
+            return agents_df
 
-    queue_agents_df['cl_out_capacity_floor'] = np.floor(queue_agents_df['cl_out_capacity'])
-    queue_agents_df['cl_out_capacity_ceil'] = np.ceil(queue_agents_df['cl_out_capacity'])
-    queue_agents_df['cl_out_capacity_int'] = np.where(np.random.rand(queue_agents_df.shape[0])<(queue_agents_df['cl_out_capacity_ceil'] - queue_agents_df['cl_out_capacity']), queue_agents_df['cl_out_capacity_floor'], queue_agents_df['cl_out_capacity_ceil']).astype(int)
+        ### update agent position
+        agent_clnl_update = {getattr(agent, 'agent_id'): self.find_next_link(agent, agent_routes) for agent in go_agents_df.itertuples()}
+        agents_df.loc[agents_df['agent_id'].isin(go_ids), ['current_link', 'cl_snid', 'cl_enid', 'cl_fft', 'cl_lanes', 'next_link', 'nl_enid', 'nl_lanes']] = pd.DataFrame(agents_df.loc[agents_df['agent_id'].isin(go_ids), 'agent_id'].map(agent_clnl_update).to_list()).values
+        ### set agent status to run
+        agents_df.loc[agents_df['agent_id'].isin(go_ids), 'agent_status'] = 1
+        agents_df.loc[agents_df['agent_id'].isin(go_ids), 'current_link_enter_time'] = t
+        agents_df['agent_status'] = np.where(agents_df['current_link']=='vl_sink', -1, agents_df['agent_status'])
 
-    queue_agents_df['nl_in_capacity_floor'] = np.floor(queue_agents_df['nl_in_capacity'])
-    queue_agents_df['nl_in_capacity_ceil'] = np.ceil(queue_agents_df['nl_in_capacity'])
-    queue_agents_df['nl_in_capacity_int'] = np.where(np.random.rand(queue_agents_df.shape[0])<(queue_agents_df['nl_in_capacity_ceil']-queue_agents_df['nl_in_capacity']), queue_agents_df['nl_in_capacity_floor'], queue_agents_df['nl_in_capacity_ceil']).astype(int)
-    # print(queue_agents_df.groupby('next_link').agg({'nl_in_capacity_int': np.mean}))
-    
-    ### filter for front agents by output capacity of the current link 
-    queue_agents_df['cl_position'] = queue_agents_df.sort_values(by='current_link_enter_time', ascending=True).groupby('current_link').cumcount()
-    # queue_agents_df['cl_position'] = queue_agents_df.loc[queue_agents_df['current_link_enter_time'].values.argsort()].groupby('current_link').cumcount()
-    # front_agents_df = queue_agents_df.loc[(queue_agents_df['cl_position']<queue_agents_df[['cl_lanes', 'cl_out_capacity_int']].min(axis=1))].copy()
-    front_agents_df = queue_agents_df.loc[(queue_agents_df['cl_position']<queue_agents_df['cl_lanes']) & (queue_agents_df['cl_position']<queue_agents_df['cl_out_capacity_int'])].copy()
-    # print(queue_agents_df.iloc[0])
-    # print(t, queue_agents_df.shape, front_agents_df.shape)
-
-    ### second filter: within next link inflow capacity; within next link storage capacity
-    front_agents_df['nl_order'] = front_agents_df.sort_values(by=['agent_movement_order'], ascending=True).groupby('next_link').cumcount()
-    front_agents_df = front_agents_df.loc[(front_agents_df['nl_order']<front_agents_df['nl_in_capacity_int']) & (front_agents_df['nl_order']<front_agents_df['nl_storage_remain'])]
-    if front_agents_df.shape[0] == 0:
         return agents_df
+        
 
-    ### go vehcles: primary vehicles plus non conflict
-    go_agents_df = front_agents_df.copy()
-    go_agents_df = go_agents_df.sort_values(by='current_link_enter_time', ascending=True)
-    go_agents_df['cn_idx'] = go_agents_df.groupby('cl_enid').cumcount()
-    go_agents_df['primary_cl'] = go_agents_df.groupby('cl_enid')['current_link'].transform('first')
-    go_agents_df['primary_nl'] = go_agents_df.groupby('cl_enid')['next_link'].transform('first')
-    go_agents_df['no_conflict'] = list(map(no_conflict_movement.get, go_agents_df[['primary_cl', 'primary_nl', 'current_link', 'next_link']].to_records(index=False).tolist()))
-    ### no conflict if has the same movement as the primary movement
-    go_agents_df['no_conflict'] = np.where((go_agents_df['primary_cl']==go_agents_df['current_link']) & (go_agents_df['primary_nl']==go_agents_df['next_link']), 1, go_agents_df['no_conflict'])
-    go_agents_df['no_conflict'] = np.where(go_agents_df['next_link']==-1, 1, go_agents_df['no_conflict'])
-    go_agents_df = go_agents_df.loc[go_agents_df['no_conflict']==1]
-    go_ids = go_agents_df['agent_id']#.values.tolist()
-    if go_agents_df.shape[0] == 0:
-        return agents_df
+class Agents:
+    def __init__(self):
+        ### hold all agents in a class
+        self.agents = None ### a pandas dataframe
+        self.agent_routes = dict() ### key: agent_id, value: route
 
-    agent_clnl_update = {getattr(agent, 'agent_id'): find_next_link(agent, agent_routes, edge_nid_dict, edge_fft_dict) for agent in go_agents_df.itertuples()}
-    agents_df.loc[agents_df['agent_id'].isin(go_ids), ['current_link', 'cl_snid', 'cl_enid', 'cl_fft', 'next_link', 'nl_enid']] = pd.DataFrame(agents_df.loc[agents_df['agent_id'].isin(go_ids), 'agent_id'].map(agent_clnl_update).to_list()).values
-    agents_df.loc[agents_df['agent_id'].isin(go_ids), 'onlink_status'] = 1
-    agents_df.loc[agents_df['agent_id'].isin(go_ids), 'current_link_enter_time'] = t
-    agents_df['agent_status'] = np.where(agents_df['current_link']==-1, -1, agents_df['agent_status'])
+    def prepare_agents(self, ods_df):
+        ### ods_df should have at least the following columns
+        ### `nid` correspond to node_id
+        self.agents = ods_df[['origin_nid', 'destin_nid']].copy()
+        ### other columns to initialize
+        self.agents['agent_status'] = 0 ### 0: unloaded; 1: run; 2:queue, -1: arrive; -2:no_route
+        try: self.agents['agent_id'] = ods_df['agent_id']
+        except KeyError:
+            self.agents['agent_id'] = np.arange(self.agents.shape[0])
+            print('Agent IDs not specified; use sequential number.')
+        try: self.agents['departure_time'] = ods_df['departure_time']
+        except KeyError:
+            self.agents['departure_time'] = 0
+            print('agents departure times not specified; assume leave immediately.')
+        for agent_attribute in ['current_link', 'current_link_enter_time', 'cl_snid', 'cl_enid', 'cl_fft', 'cl_lanes', 'next_link', 'nl_enid', 'nl_lanes']:
+            self.agents[agent_attribute] = np.nan
 
-    return agents_df
+    def get_agent_routes(self, origin, destin, g):
+        ### note this applies to individual agents
+        sp = g.dijkstra(origin, destin)
+        sp_dist = sp.distance(destin)
+        if sp_dist > 1e8:
+            sp.clear()
+            route = {}
+        else:
+            route = {start_node_id: end_node_id for (start_node_id, end_node_id) in sp.route(destin)}
+            sp.clear()
+        return route
 
-def find_next_link(agent, agent_routes, edge_nid_dict, edge_fft_dict):
-    agent_id = getattr(agent, 'agent_id')
-    agent_cl_enid = getattr(agent, 'cl_enid')
-    ### current link end is destination
-    if agent_cl_enid == getattr(agent, 'destin_nid'):
-        return [-1, agent_cl_enid, 'sink', 1e5, -2, 'sink2']
-    agent_nl_enid = agent_routes[agent_id][agent_cl_enid]
-    agent_nl = edge_nid_dict[(agent_cl_enid, agent_nl_enid)]
-    agent_nl_fft = edge_fft_dict[agent_nl]
-    ### next link end is destination, next next link does not exist
-    if agent_nl_enid == getattr(agent, 'destin_nid'):
-        return [agent_nl, agent_cl_enid, agent_nl_enid, agent_nl_fft, -1, 'sink']
-    agent_nnl_enid = agent_routes[agent_id][agent_nl_enid]
-    agent_nnl = edge_nid_dict[(agent_nl_enid, agent_nnl_enid)]
-    return [agent_nl, agent_cl_enid, agent_nl_enid, agent_nl_fft, agent_nnl, agent_nnl_enid]
+    def update_route_info(self, reroute_agents, network, just_loaded=False):
 
-def get_agent_routes(origin, destin, g, t):
+        unarrived_list = []
+        agent_clnl_update = dict()
+        for agent in reroute_agents.itertuples():
+            ### agent id
+            agent_id = getattr(agent, 'agent_id')
+            ### get initial or new routes
+            route = self.get_agent_routes(getattr(agent, 'cl_enid'), getattr(agent, 'destin_nid'), network.g)
+            ### update route
+            self.agent_routes[agent_id] = route
+            ### no path
+            if len(route)==0: unarrived_list.append(agent_id)
+            else: agent_clnl_update[agent_id] = network.find_next_link(agent, self.agent_routes, just_loaded=True)
+        if len(unarrived_list)>0:
+            self.agents.loc[self.agents['agent_id'].isin(unarrived_list), 'agent_status'] = -2
+        self.agents.loc[self.agents['agent_id'].isin(
+            reroute_agents['agent_id']), 
+                        ['current_link', 'cl_snid', 'cl_enid', 'cl_fft', 'cl_lanes', 'next_link', 'nl_enid', 'nl_lanes'
+                        ]] = pd.DataFrame(reroute_agents['agent_id'].map(agent_clnl_update).to_list()).values
 
-    sp = g.dijkstra(origin, destin)
-    sp_dist = sp.distance(destin)
-    if (t==0) and (sp_dist > 1e8):
-        sp.clear()
-        # self.route = {self.current_link_start_nid: self.current_link_end_nid}
-        route = {}
-        # self.furthest_nid = self.current_link_end_nid
-        status = 'shelter_p'
-        # print(self.agent_id, self.current_link_start_nid, self.current_link_end_nid)
-    elif (t>0) and (sp_dist>1e8):
-        sp.clear()
-        pass
-    else:
-        route_distance = sp_dist
-        sp_route = sp.route(destin)
-        ### create a path. Order only preserved in Python 3.7+. Do not rely on.
-        # self.route = {self.current_link_start_nid: self.current_link_end_nid}
-        route = {}
-        for (start_nid, end_nid) in sp_route:
-            route[start_nid] = end_nid
-        sp.clear()
+    def load_agents(self, network=None, t=None):
+        ### load agent
+        load_ids = t == self.agents['departure_time']
+        if np.sum(load_ids) == 0:
+            return
+        self.agents['cl_enid'] = self.agents['origin_nid']
+        ### loaded to the queue on virtual source links
+        self.agents['agent_status'] = np.where(load_ids, 2, self.agents['agent_status'])
+        self.agents['current_link_enter_time'] = np.where(load_ids, t, self.agents['current_link_enter_time'])
+        self.update_route_info(self.agents[load_ids], network, just_loaded=True)
+
+    def reroutes(self, network=None, t=None, reroute_frequency=None):
+        
+        if reroute_frequency is None:
+            ### no reroute
+            return
+        else:
+            ### staggered rerouting
+            reroute_agents = self.agents[
+                (self.agents['agent_status'].isin([1, 2])) &
+                (self.agents['agent_id']%reroute_frequency==t)]
+        ### update routes
+        self.update_route_info(reroute_agents, network)
+
+
+class Simulation():
+    def __init__(self):
+        self.agents = None
+        self.network = None
+
+
+    def initialize_simulation(self, nodes_df, links_df, ods_df):
+        
+        ### initialize network
+        self.network = Network()
+        self.network.prepare_network(nodes_df, links_df, ods_df)
+        
+        ### initialize demand
+        self.agents = Agents()
+        self.agents.prepare_agents(ods_df)
     
-    return route
+
+    def run_one_step(self, t, reroute_frequency=None):
+        
+        ### load agents that are ready to departure; find routes and next links for them
+        self.agents.load_agents(network=self.network, t=t)
+        
+        ### reroute agents
+        self.agents.reroutes(network=self.network, t=t, reroute_frequency=reroute_frequency)
+        self.agents.agents = self.network.run_link_model(agents=self.agents, t=t)
+        self.agents.agents = self.network.run_node_model(agents=self.agents, t=t)
+
+
+
 

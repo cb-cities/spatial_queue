@@ -13,10 +13,7 @@ from shapely.wkt import loads
 from shapely.ops import split
 from shapely.geometry import Point
 from shapely.geometry import LineString
-# for coordinate transformation
-# from shapely.ops import transform
-# import pyproj
-# geo2prj = pyproj.Transformer.from_proj(pyproj.Proj('epsg:4326'), pyproj.Proj('epsg:3857'), always_xy=True)
+
 ### usr
 abs_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, abs_path)
