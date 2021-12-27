@@ -251,11 +251,16 @@ class Network:
         go_agents_df['control_capacity'] = np.floor(
             go_agents_df[['cl_capacity', 'nl_capacity']].min(axis=1) 
             + np.random.random(size=go_agents_df.shape[0]))
-        go_agents_df['control_capacity'] = go_agents_df.groupby(['current_link', 'next_link'])['control_capacity'].transform('first')
+        #print(go_agents_df.head(1))
+        go_agents_df['control_capacity'] = go_agents_df.groupby(
+            ['current_link', 'next_link'])['control_capacity'].transform('first')
         ### filter for vehicles that can move according to the control capacity
+        #print(go_agents_df.head(1))
         go_agents_df['current_link_queue_time'] = t - go_agents_df['cl_fft'] - go_agents_df['current_link_enter_time']
-        go_agents_df['clnl_position'] = go_agents_df.sort_values(
-            by='current_link_queue_time', ascending=True).groupby(['current_link', 'next_link'], sort=False).cumcount()
+        #print(go_agents_df.head(1))
+        go_agents_df = go_agents_df.sort_values(by='current_link_queue_time', ascending=True)
+        #print(go_agents_df.head(1))
+        go_agents_df['clnl_position'] = go_agents_df.groupby(['current_link', 'next_link'], sort=False).cumcount()
         go_agents_df = go_agents_df.loc[
             go_agents_df['clnl_position']<go_agents_df['control_capacity']]
         if go_agents_df.shape[0] == 0:
