@@ -113,6 +113,8 @@ class Node:
             ### inlink-sending, outlink-receiving both permits
             elif (link_id_dict[il].ou_c >= 1) & (link_id_dict[ol].in_c >= 1):
                 ### before move agent as it uses the old agent.cl_enter_time
+                #if self.nid == 17:
+                #    print(t_now, il, ol)
                 link_id_dict[il].send_veh(t_now, agent_id, agent_id_dict)
                 agent_id_dict[agent_id].move_agent(t_now, self.nid, next_node, 'flow')
                 link_id_dict[ol].receive_veh(agent_id)
@@ -123,9 +125,12 @@ class Node:
                 toss_coin = random.choices([0,1], weights=[1-control_cap, control_cap], k=1)
                 if toss_coin[0]: ### vehicle can move
                     ### before move agent as it uses the old agent.cl_enter_time
+                    #if self.nid == 17:
+                    #    print(t_now, il, ol, control_cap)
                     link_id_dict[il].send_veh(t_now, agent_id, agent_id_dict)
                     agent_id_dict[agent_id].move_agent(t_now, self.nid, next_node, 'chance')
                     link_id_dict[ol].receive_veh(agent_id)
+                    
                 else: ### even though vehicle cannot move, the remaining capacity needs to be adjusted
                     if link_id_dict[il].ou_c < link_id_dict[ol].in_c:
                        link_id_dict[il].ou_c = max(0, link_id_dict[il].ou_c-1)
