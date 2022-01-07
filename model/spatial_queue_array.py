@@ -194,7 +194,8 @@ class Network:
         agent_nl_capacity = self.link_capacity_dict[agent_nl]
         ### next link end is destination, next next link does not exist
         if agent_nl_enid == getattr(agent, 'destin_nid'):
-            return [agent_nl, agent_cl_enid, agent_nl_enid, agent_nl_fft, agent_nl_lanes, agent_nl_capacity, 'vl_sink', 'sink_node', 1e8, 1e8/3.6]
+            #return [agent_nl, agent_cl_enid, agent_nl_enid, agent_nl_fft, agent_nl_lanes, agent_nl_capacity, 'vl_sink', 'sink_node', 1e8, 1e8/3.6]
+            return [agent_nl, agent_cl_enid, agent_nl_enid, agent_nl_fft, 1000, 1e7/3.6, 'vl_sink', 'sink_node', 1e8, 1e8/3.6]
         agent_nnl_enid = agent_routes[agent_id][agent_nl_enid]
         agent_nnl = self.link_nid_dict[(agent_nl_enid, agent_nnl_enid)]
         agent_nnl_lanes = self.link_lanes_dict[agent_nnl]
