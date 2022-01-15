@@ -225,7 +225,7 @@ class Network:
 
         return agents_df
     
-    def run_node_model(self, agents=None, t=None):
+    def run_node_model(self, agents=None, t=None, special_nodes=None):
         
         agents_df = agents.agents
         agent_routes = agents.agent_routes
@@ -240,17 +240,25 @@ class Network:
         ### choose primary movement direction
         ### 1. first come first serve
         #go_agents_df = go_agents_df.sort_values(by='current_link_enter_time', ascending=True)
-        ### 2. random
+        ### 2. random (e.g., a random traffic light)
         go_agents_df = go_agents_df.sample(frac=1)
         ### 3.highest control capacity can go
         #go_agents_df = go_agents_df.sort_values(by='control_capacity', ascending=True)
-        ### the results
+        ### user-specified movement priority at nodes (e.g., roundabouts)
+        go_agents_midx = pd.MultiIndex.from_frame(go_agents_df[['current_link', 'next_link']])
+        go_agents_df['default_priority'] = 3
+        go_agents_df['default_priority'] = np.where(go_agents_midx.isin(
+            special_nodes['first_priority']), 1, go_agents_df['default_priority'])
+        go_agents_df['default_priority'] = np.where(go_agents_midx.isin(
+            special_nodes['second_priority']), 2, go_agents_df['default_priority'])
+        go_agents_df = go_agents_df.sort_values(by='default_priority', ascending=True)
+        ### the results: directions of the first vehicle in the queue after sorting
         go_agents_df['primary_cl'] = go_agents_df.groupby('cl_enid', sort=False)['current_link'].transform('first')
         go_agents_df['primary_nl'] = go_agents_df.groupby('cl_enid', sort=False)['next_link'].transform('first')
         
         ### limit by capacity
         go_agents_df['control_capacity'] = np.floor(
-            go_agents_df[['cl_capacity', 'nl_capacity']].min(axis=1) 
+            go_agents_df[['cl_capacity', 'nl_capacity']].min(axis=1) ### mostly zero (except highways)
             + np.random.random(size=go_agents_df.shape[0]))
         #print(go_agents_df.head(1))
         go_agents_df['control_capacity'] = go_agents_df.groupby(
@@ -259,7 +267,7 @@ class Network:
         #print(go_agents_df.head(1))
         go_agents_df['current_link_queue_time'] = t - go_agents_df['cl_fft'] - go_agents_df['current_link_enter_time']
         #print(go_agents_df.head(1))
-        go_agents_df = go_agents_df.sort_values(by='current_link_queue_time', ascending=True)
+        go_agents_df = go_agents_df.sort_values(by='current_link_queue_time', ascending=False)
         #print(go_agents_df.head(1))
         go_agents_df['clnl_position'] = go_agents_df.groupby(['current_link', 'next_link'], sort=False).cumcount()
         go_agents_df = go_agents_df.loc[
@@ -277,7 +285,10 @@ class Network:
             return agents_df
         
         ### label non-conflict movements
-        go_agents_df['no_conflict'] = list(map(self.no_conflict_moves.get, go_agents_df[['primary_cl', 'primary_nl', 'current_link', 'next_link']].to_records(index=False).tolist()))
+        #go_agents_df['no_conflict'] = list(map(self.no_conflict_moves.get, go_agents_df[['primary_cl', 'primary_nl', 'current_link', 'next_link']].to_records(index=False).tolist()))
+        ### try if it is faster?
+        go_agents_midx = pd.MultiIndex.from_frame(go_agents_df[['primary_cl', 'primary_nl', 'current_link', 'next_link']])
+        go_agents_df['no_conflict'] = np.where(go_agents_midx.isin(self.no_conflict_moves.keys()), 1, 0)
         ### Coming from virtual source or going to virtual sink. Assume no conflict with any direction.
         go_agents_df['no_conflict'] = np.where(
             (go_agents_df['cl_lanes']>=100) | 
@@ -388,7 +399,8 @@ class Agents:
         load_ids = t == self.agents['departure_time']
         if np.sum(load_ids) == 0:
             return
-        self.agents['cl_enid'] = self.agents['origin_nid']
+        self.agents['cl_enid'] = np.where(load_ids, self.agents['origin_nid'], self.agents['cl_enid'])
+        self.agents['cl_enid'] = self.agents['cl_enid'].astype(int)
         ### loaded to the queue on virtual source links
         self.agents['agent_status'] = np.where(load_ids, 2, self.agents['agent_status'])
         self.agents['current_link_enter_time'] = np.where(load_ids, t, self.agents['current_link_enter_time'])
@@ -425,7 +437,7 @@ class Simulation():
         self.agents.prepare_agents(ods_df)
     
 
-    def run_one_step(self, t, reroute_frequency=None):
+    def run_one_step(self, t, reroute_frequency=None, special_nodes=None):
         
         ### load agents that are ready to departure; find routes and next links for them
         self.agents.load_agents(network=self.network, t=t)
@@ -433,7 +445,7 @@ class Simulation():
         ### reroute agents
         self.agents.reroutes(network=self.network, t=t, reroute_frequency=reroute_frequency)
         self.agents.agents = self.network.run_link_model(agents=self.agents, t=t)
-        self.agents.agents = self.network.run_node_model(agents=self.agents, t=t)
+        self.agents.agents = self.network.run_node_model(agents=self.agents, t=t, special_nodes=special_nodes)
 
 
 
