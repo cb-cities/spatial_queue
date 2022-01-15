@@ -111,6 +111,7 @@ class Network:
             incoming_links[link_enid].append(link_id)
             outgoing_links[link_snid].append(link_id)
         
+        #display(self.nodes[self.nodes['node_id']==194563])
         for node in self.nodes[self.nodes['node_type']=='real'].itertuples():
             node_id = getattr(node, 'node_id')
             nc = node_coords[node_id]
@@ -245,13 +246,13 @@ class Network:
         ### 3.highest control capacity can go
         #go_agents_df = go_agents_df.sort_values(by='control_capacity', ascending=True)
         ### user-specified movement priority at nodes (e.g., roundabouts)
-        go_agents_midx = pd.MultiIndex.from_frame(go_agents_df[['current_link', 'next_link']])
-        go_agents_df['default_priority'] = 3
-        go_agents_df['default_priority'] = np.where(go_agents_midx.isin(
-            special_nodes['first_priority']), 1, go_agents_df['default_priority'])
-        go_agents_df['default_priority'] = np.where(go_agents_midx.isin(
-            special_nodes['second_priority']), 2, go_agents_df['default_priority'])
-        go_agents_df = go_agents_df.sort_values(by='default_priority', ascending=True)
+        #go_agents_midx = pd.MultiIndex.from_frame(go_agents_df[['current_link', 'next_link']])
+        #go_agents_df['default_priority'] = 3
+        #go_agents_df['default_priority'] = np.where(go_agents_midx.isin(
+        #    special_nodes['first_priority']), 1, go_agents_df['default_priority'])
+        #go_agents_df['default_priority'] = np.where(go_agents_midx.isin(
+        #    special_nodes['second_priority']), 2, go_agents_df['default_priority'])
+        #go_agents_df = go_agents_df.sort_values(by='default_priority', ascending=True)
         ### the results: directions of the first vehicle in the queue after sorting
         go_agents_df['primary_cl'] = go_agents_df.groupby('cl_enid', sort=False)['current_link'].transform('first')
         go_agents_df['primary_nl'] = go_agents_df.groupby('cl_enid', sort=False)['next_link'].transform('first')
@@ -285,10 +286,10 @@ class Network:
             return agents_df
         
         ### label non-conflict movements
-        #go_agents_df['no_conflict'] = list(map(self.no_conflict_moves.get, go_agents_df[['primary_cl', 'primary_nl', 'current_link', 'next_link']].to_records(index=False).tolist()))
+        go_agents_df['no_conflict'] = list(map(self.no_conflict_moves.get, go_agents_df[['primary_cl', 'primary_nl', 'current_link', 'next_link']].to_records(index=False).tolist()))
         ### try if it is faster?
-        go_agents_midx = pd.MultiIndex.from_frame(go_agents_df[['primary_cl', 'primary_nl', 'current_link', 'next_link']])
-        go_agents_df['no_conflict'] = np.where(go_agents_midx.isin(self.no_conflict_moves.keys()), 1, 0)
+        #go_agents_midx = pd.MultiIndex.from_frame(go_agents_df[['primary_cl', 'primary_nl', 'current_link', 'next_link']])
+        #go_agents_df['no_conflict'] = np.where(go_agents_midx.isin(self.no_conflict_moves.keys()), 1, 0)
         ### Coming from virtual source or going to virtual sink. Assume no conflict with any direction.
         go_agents_df['no_conflict'] = np.where(
             (go_agents_df['cl_lanes']>=100) | 
@@ -380,16 +381,17 @@ class Agents:
             ### agent id
             agent_id = getattr(agent, 'agent_id')
             ### get initial or new routes
-            route = self.get_agent_routes(getattr(agent, 'cl_enid'), getattr(agent, 'destin_nid'), network.g)
+            route = self.get_agent_routes(int(getattr(agent, 'cl_enid')), int(getattr(agent, 'destin_nid')), network.g)
             ### update route
             self.agent_routes[agent_id] = route
             ### no path
-            if len(route)==0: unarrived_list.append(agent_id)
+            if len(route)==0: 
+                unarrived_list.append(agent_id)
+                print('no route for {}'.format(agent_id))
             else: agent_clnl_update[agent_id] = network.find_next_link(agent, self.agent_routes, just_loaded=True)
         if len(unarrived_list)>0:
             self.agents.loc[self.agents['agent_id'].isin(unarrived_list), 'agent_status'] = -2
-        self.agents.loc[self.agents['agent_id'].isin(
-            reroute_agents['agent_id']), 
+        self.agents.loc[self.agents['agent_id'].isin(reroute_agents['agent_id']), 
                         ['current_link', 'cl_snid', 'cl_enid', 'cl_fft', 'cl_lanes', 'cl_capacity',
                          'next_link', 'nl_enid', 'nl_lanes', 'nl_capacity'
                         ]] = pd.DataFrame(reroute_agents['agent_id'].map(agent_clnl_update).to_list()).values
@@ -400,10 +402,10 @@ class Agents:
         if np.sum(load_ids) == 0:
             return
         self.agents['cl_enid'] = np.where(load_ids, self.agents['origin_nid'], self.agents['cl_enid'])
-        self.agents['cl_enid'] = self.agents['cl_enid'].astype(int)
         ### loaded to the queue on virtual source links
         self.agents['agent_status'] = np.where(load_ids, 2, self.agents['agent_status'])
         self.agents['current_link_enter_time'] = np.where(load_ids, t, self.agents['current_link_enter_time'])
+        #print(self.agents[load_ids])
         self.update_route_info(self.agents[load_ids], network, just_loaded=True)
 
     def reroutes(self, network=None, t=None, reroute_frequency=None):
