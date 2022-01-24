@@ -370,6 +370,8 @@ class Agents:
             route = {}
         else:
             route = {start_node_id: end_node_id for (start_node_id, end_node_id) in sp.route(destin)}
+            #if 16286 in route.keys():
+            #    print(route)
             sp.clear()
         return route
 
