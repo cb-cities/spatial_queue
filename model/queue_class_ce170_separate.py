@@ -3,7 +3,6 @@
 import os, sys
 import time 
 import random
-import math
 import numpy as np
 from ctypes import c_double
 from shapely.wkt import loads
@@ -17,16 +16,14 @@ from sp import interface
 ### profile
 import line_profiler
 import future
-#profile = line_profiler.LineProfiler()
 
 class Node:
-    def __init__(self, node_id, lon, lat, ntype, osmid=None, simulation=None):
+    def __init__(self, node_id, lon, lat, ntype, osmid=None):
         self.nid = node_id
         self.lon = lon
         self.lat = lat
         self.ntype = ntype
         self.osmid = osmid
-        self.simulation = simulation
         ### derived
         self.in_links = {} ### {in_link_id: straight_ahead_out_link_id, ...}
         self.out_links = []
@@ -34,10 +31,10 @@ class Node:
         self.status = None
 
     def create_virtual_node(self):
-        return Node('vn_source_{}'.format(self.nid), self.lon+0.001, self.lat+0.001, 'vn_source', simulation=self.simulation)
+        return Node('vn_source_{}'.format(self.nid), self.lon+0.001, self.lat+0.001, 'vn_source')
 
     def create_virtual_link(self):
-        return Link('vl_in_{}'.format(self.nid), 100, 0, 0, 100000, 'vl_in', 'vn_source_{}'.format(self.nid), self.nid, 'LINESTRING({} {}, {} {})'.format(self.lon+0.001, self.lat+0.001, self.lon, self.lat), simulation=self.simulation)
+        return Link('vl_in_{}'.format(self.nid), 100, 0, 0, 100000, 'vl_in', 'vn_source_{}'.format(self.nid), self.nid, 'LINESTRING({} {}, {} {})'.format(self.lon+0.001, self.lat+0.001, self.lon, self.lat))
     
     def calculate_straight_ahead_links(self, node_id_dict=None, link_id_dict=None):
         for il in self.in_links.keys():
@@ -59,18 +56,21 @@ class Node:
             if (abs(ol_dir)<=45) and link_id_dict[il].ltype[0:2]!='vl':
                 self.in_links[il] = sa_ol
 
-    @profile
+    #@profile
     def find_go_vehs(self, go_link, agent_id_dict=None, node_id_dict=None, link_id_dict=None, node2link_dict=None):
         go_vehs_list = []
         incoming_lanes = int(np.floor(go_link.lanes))
         incoming_vehs = len(go_link.queue_veh)
         for ln in range(min(incoming_lanes, incoming_vehs)):
             agent_id = go_link.queue_veh[ln]
-            agent_next_node, ol, agent_dir = agent_id_dict[agent_id].prepare_agent(self.nid, node2link_dict=node2link_dict, node_id_dict=node_id_dict)   
+            try:
+                agent_next_node, ol, agent_dir = agent_id_dict[agent_id].prepare_agent(self.nid, node2link_dict=node2link_dict, node_id_dict=node_id_dict) 
+            except AssertionError:
+                print(agent_id, agent_id_dict[agent_id].status, agent_id_dict[agent_id].cls, agent_id_dict[agent_id].cle, self.nid, self.in_links.keys(), go_link.lid, go_link.queue_veh, link_id_dict[node2link_dict[(agent_id_dict[agent_id].cls, agent_id_dict[agent_id].cle)]].queue_veh)  
             go_vehs_list.append([agent_id, agent_next_node, go_link.lid, ol, agent_dir])
         return go_vehs_list
 
-    @profile
+    #@profile
     def non_conflict_vehs(self, t_now, link_id_dict=None, agent_id_dict=None, node2link_dict=None, node_id_dict=None):
         
         go_vehs = []
@@ -95,13 +95,13 @@ class Node:
         go_vehs += [veh for veh in op_go_vehs_list if veh[-1]>-45]
         return go_vehs
 
-    @profile
-    def run_node_model(self, t_now):
+    #@profile
+    def run_node_model(self, t_now, simulation_params, simulation_states):
 
-        node_id_dict = self.simulation.all_nodes
-        link_id_dict = self.simulation.all_links
-        agent_id_dict = self.simulation.all_agents
-        node2link_dict = self.simulation.node2link_dict
+        node_id_dict = simulation_states['all_nodes']
+        link_id_dict = simulation_states['all_links']
+        agent_id_dict = simulation_states['all_agents']
+        node2link_dict = simulation_params['node2link_dict']
         go_vehs = self.non_conflict_vehs(t_now=t_now, link_id_dict=link_id_dict, agent_id_dict=agent_id_dict, node2link_dict=node2link_dict, node_id_dict=node_id_dict)
 
         ### Agent reaching destination
@@ -148,7 +148,7 @@ class Node:
 
 
 class Link:
-    def __init__(self, link_id, lanes, length, fft, capacity, ltype, start_nid, end_nid, geometry, simulation=None):
+    def __init__(self, link_id, lanes, length, fft, capacity, ltype, start_nid, end_nid, geometry):
         ### input
         self.lid = link_id
         self.lanes = lanes
@@ -159,7 +159,6 @@ class Link:
         self.start_nid = start_nid
         self.end_nid = end_nid
         self.geometry = loads(geometry)
-        self.simulation = simulation
         ### derived
         self.store_cap = max(18, length*lanes) ### at least allow any vehicle to pass. i.e., the road won't block any vehicle because of the road length
         self.in_c = self.capacity/3600.0 # capacity in veh/s
@@ -184,15 +183,15 @@ class Link:
         self.run_veh.append(agent_id)
         self.in_c = max(0, self.in_c-1)
 
-    @profile
-    def run_link_model(self, t_now):
-        if t_now%60 == 0: self.update_travel_time(t_now, link_time_lookback_freq=60, g=self.simulation.g)
+    #@profile
+    def run_link_model(self, t_now, simulation_states):
+        if t_now%60 == 0: self.update_travel_time(t_now, link_time_lookback_freq=60, g=simulation_states['g'])
         for agent_id in self.run_veh:
-            if self.simulation.all_agents[agent_id].cl_enter_time < t_now - self.fft:
+            if simulation_states['all_agents'][agent_id].cl_enter_time < t_now - self.fft:
                 self.queue_veh.append(agent_id)
         self.run_veh = [v for v in self.run_veh if v not in self.queue_veh]
         ### remaining spaces on link for the node model to move vehicles to this link
-        self.st_c = self.store_cap - sum([self.simulation.all_agents[agent_id].veh_len for agent_id in self.run_veh+self.queue_veh])
+        self.st_c = self.store_cap - sum([simulation_states['all_agents'][agent_id].veh_len for agent_id in self.run_veh+self.queue_veh])
         self.in_c, self.ou_c = self.capacity/3600, self.capacity/3600
     
     def update_travel_time(self, t_now, link_time_lookback_freq=None, g=None):
@@ -202,7 +201,7 @@ class Link:
             g.update_edge(self.start_nid, self.end_nid, c_double(self.travel_time))
 
 class Agent:
-    def __init__(self, id, origin_nid, destin_nid, dept_time, veh_len, gps_reroute, simulation=None):
+    def __init__(self, id, origin_nid, destin_nid, dept_time, veh_len, gps_reroute):
         #input
         self.aid = id
         self.origin_nid = origin_nid
@@ -210,47 +209,42 @@ class Agent:
         self.dept_time = dept_time
         self.veh_len = veh_len
         self.gps_reroute = gps_reroute
-        self.simulation = simulation
         ### derived
         self.cls = 'vn_source_{}'.format(self.origin_nid) # current link start node
         self.cle = self.origin_nid # current link end node
         ### Empty
-        self.route_igraph = dict()#[]
+        self.route_igraph = []
         self.find_route = None
         self.status = None
         self.cl_enter_time = None
 
-    def load_trips(self, t_now):
+    def load_trips(self, t_now, simulation_params, simulation_states):
         if (self.dept_time == t_now):
-            #initial_edge = self.simulation.node2link_dict[self.route_igraph[0]]
-            initial_edge = self.simulation.node2link_dict[(self.cls, self.route_igraph[self.cls])]
-            self.simulation.all_links[initial_edge].run_veh.append(self.aid)
+            initial_edge = simulation_params['node2link_dict'][self.route_igraph[0]]
+            simulation_states['all_links'][initial_edge].run_veh.append(self.aid)
             self.status = 'loaded'
             self.cl_enter_time = t_now
 
-    @profile
     def prepare_agent(self, node_id, node2link_dict=None, node_id_dict=None):
         assert self.cle == node_id, "agent next node {} is not the transferring node {}, route {}".format(self.cle, node_id, self.route_igraph)
         if self.destin_nid == node_id: ### current node is agent destination
             return None, None, 0 ### id, next_node, dir
-        #agent_next_node = [end for (start, end) in self.route_igraph if start == node_id][0]
-        #agent_next_node = list(filter(lambda x: x[0]==node_id, self.route_igraph))[0][1]
-        agent_next_node = self.route_igraph[node_id]
+        agent_next_node = [end for (start, end) in self.route_igraph if start == node_id][0]
         ol = node2link_dict[(node_id, agent_next_node)]
         x_start, y_start = node_id_dict[self.cls].lon, node_id_dict[self.cls].lat
         x_mid, y_mid = node_id_dict[node_id].lon, node_id_dict[node_id].lat
         x_end, y_end = node_id_dict[agent_next_node].lon, node_id_dict[agent_next_node].lat
         in_vec, out_vec = (x_mid-x_start, y_mid-y_start), (x_end-x_mid, y_end-y_mid)
         dot, det = (in_vec[0]*out_vec[0] + in_vec[1]*out_vec[1]), (in_vec[0]*out_vec[1] - in_vec[1]*out_vec[0])
-        #agent_dir = np.arctan2(det, dot)*180/np.pi 
-        agent_dir = math.atan2(det, dot)*180/3.1415926 
+        agent_dir = np.arctan2(det, dot)*180/np.pi 
         return agent_next_node, ol, agent_dir
     
     def move_agent(self, t_now, new_cls, new_cle, new_status):
-        self.cls = new_cls
-        self.cle = new_cle
-        self.status = new_status
-        self.cl_enter_time = t_now
+        #self.cls = new_cls
+        #self.cle = new_cle
+        #self.status = new_status
+        #self.cl_enter_time = t_now
+        return [self.aid, new_cls, new_cle, new_status, t_now]
 
     def get_path(self, g=None):
         sp = g.dijkstra(self.cle, self.destin_nid)
@@ -258,13 +252,11 @@ class Agent:
 
         if sp_dist > 10e7:
             sp.clear()
-            self.route_igraph = dict()#[]
+            self.route_igraph = []
             return 'no_path_found'
         else:
             sp_route = sp.route(self.destin_nid)
-            #self.route_igraph = [(self.cls, self.cle)] + [(start_nid, end_nid) for (start_nid, end_nid) in sp_route]
-            self.route_igraph = {start_nid: end_nid for (start_nid, end_nid) in sp_route}
-            self.route_igraph[self.cls] = self.cle
+            self.route_igraph = [(self.cls, self.cle)] + [(start_nid, end_nid) for (start_nid, end_nid) in sp_route]
             sp.clear()
             return 'path_found'
 
@@ -287,14 +279,14 @@ class Simulation:
         nodes = []
         links = []
         for row in nodes_df.itertuples():
-            real_node = Node(getattr(row, 'node_id'), getattr(row, 'lon'), getattr(row, 'lat'), getattr(row, 'type'), getattr(row, 'node_osmid'), simulation=self)
+            real_node = Node(getattr(row, 'node_id'), getattr(row, 'lon'), getattr(row, 'lat'), getattr(row, 'type'), getattr(row, 'node_osmid'))
             virtual_node = real_node.create_virtual_node()
             virtual_link = real_node.create_virtual_link()
             nodes.append(real_node)
             nodes.append(virtual_node)
             links.append(virtual_link)
         for row in links_df.itertuples():
-            real_link = Link(getattr(row, 'link_id'), getattr(row, 'lanes'), getattr(row, 'length'), getattr(row, 'fft'), getattr(row, 'capacity'), getattr(row, 'type'), getattr(row, 'start_node_id'), getattr(row, 'end_node_id'), getattr(row, 'geometry'), simulation=self)
+            real_link = Link(getattr(row, 'link_id'), getattr(row, 'lanes'), getattr(row, 'length'), getattr(row, 'fft'), getattr(row, 'capacity'), getattr(row, 'type'), getattr(row, 'start_node_id'), getattr(row, 'end_node_id'), getattr(row, 'geometry'))
             links.append(real_link)
 
         ### dictionaries for quick look-up
@@ -317,4 +309,4 @@ class Simulation:
         # print('# trips {}'.format(od_df.shape[0]))
 
         for row in od_df.itertuples():
-            self.all_agents[getattr(row, 'agent_id')] = Agent(getattr(row, 'agent_id'), getattr(row, 'origin_node_id'), getattr(row, 'destin_node_id'), getattr(row, 'dept_time'), getattr(row, 'veh_len'), getattr(row, 'gps_reroute'), simulation=self)
+            self.all_agents[getattr(row, 'agent_id')] = Agent(getattr(row, 'agent_id'), getattr(row, 'origin_node_id'), getattr(row, 'destin_node_id'), getattr(row, 'dept_time'), getattr(row, 'veh_len'), getattr(row, 'gps_reroute'))
