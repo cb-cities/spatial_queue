@@ -59,7 +59,6 @@ class Node:
             if (abs(ol_dir)<=45) and link_id_dict[il].ltype[0:2]!='vl':
                 self.in_links[il] = sa_ol
 
-    #@profile
     def find_go_vehs(self, go_link, agent_id_dict=None, node_id_dict=None, link_id_dict=None, node2link_dict=None):
         go_vehs_list = []
         incoming_lanes = int(np.floor(go_link.lanes))
@@ -70,7 +69,6 @@ class Node:
             go_vehs_list.append([agent_id, agent_next_node, go_link.lid, ol, agent_dir])
         return go_vehs_list
 
-    #@profile
     def non_conflict_vehs(self, t_now, link_id_dict=None, agent_id_dict=None, node2link_dict=None, node_id_dict=None):
         
         go_vehs = []
@@ -95,7 +93,6 @@ class Node:
         go_vehs += [veh for veh in op_go_vehs_list if veh[-1]>-45]
         return go_vehs
 
-    #@profile
     def run_node_model(self, t_now):
 
         node_id_dict = self.simulation.all_nodes
@@ -184,7 +181,6 @@ class Link:
         self.run_veh.append(agent_id)
         self.in_c = max(0, self.in_c-1)
 
-    #@profile
     def run_link_model(self, t_now):
         if t_now%60 == 0: self.update_travel_time(t_now, link_time_lookback_freq=60, g=self.simulation.g)
         for agent_id in self.run_veh:
@@ -228,7 +224,6 @@ class Agent:
             self.status = 'loaded'
             self.cl_enter_time = t_now
 
-    #@profile
     def prepare_agent(self, node_id, node2link_dict=None, node_id_dict=None):
         assert self.cle == node_id, "agent next node {} is not the transferring node {}, route {}".format(self.cle, node_id, self.route_igraph)
         if self.destin_nid == node_id: ### current node is agent destination
